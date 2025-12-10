@@ -1,0 +1,59 @@
+Metadata-Version: 2.1
+Name: py_order_utils
+Version: 0.3.2
+Summary: Python utilities used to generate and sign orders from Polymarket's Exchange
+Home-page: https://github.com/polymarket/python-order-utils
+Author: Polymarket Engineering
+Author-email: engineering@polymarket.com
+Maintainer: Polymarket Engineering
+Maintainer-email: engineering@polymarket.com
+Project-URL: Bug Tracker, https://github.com/polymarket/python-order-utils
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.9.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: eth-utils >=4.1.1
+Requires-Dist: eth-account >=0.13.0
+Requires-Dist: poly-eip712-structs
+Requires-Dist: pytest
+
+## Polymarket CLOB Python order-utils
+
+<a href='https://pypi.org/project/py-order-utils'>
+    <img src='https://img.shields.io/pypi/v/py-order-utils.svg' alt='PyPI'/>
+</a>
+
+Python utilities used to generate and sign orders from Polymarket's Exchange
+
+### Install
+
+```bash
+pip install py-order-utils
+```
+
+### Usage
+
+```py
+from py_order_utils.builders import OrderBuilder
+from py_order_utils.signer import Signer
+from pprint import pprint
+
+def main():
+    exchange_address = "0x...."
+    chain_id = 80002
+    signer = Signer("0x....")
+    builder = OrderBuilder(exchange_address, chain_id, signer)
+
+    # Create and sign the order
+    order = builder.build_signed_order(
+        OrderData(
+            ...
+        )
+    )
+
+    # Generate the Order and Signature json to be sent to the CLOB API
+    pprint(json.dumps(order.dict()))
+
+```

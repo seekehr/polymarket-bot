@@ -1,0 +1,8 @@
+# Python dependencies for setup script
+# Tip: avoid Debian/Ubuntu "externally-managed-environment" errors by using a venv:
+#   python3 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements.txt
+py-clob-client>=0.1.0,<0.2.0
+eth-account>=0.8.0,<0.13.0
+pyyaml>=6.0,<7.0

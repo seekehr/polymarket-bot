@@ -1,0 +1,160 @@
+# Polymarket Trading Bot Configuration
+
+# API Configuration
+api:
+  # Polymarket CLOB API endpoints
+  rest_endpoint: "https://clob.polymarket.com"
+  websocket_url: "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+
+  # Authentication - Fill these in directly or use the setup script
+  api_key: ""
+  api_secret: ""
+  passphrase: ""
+
+  # Your EOA wallet private key (without 0x prefix)
+  # WARNING: Keep this secure! Never commit this file with real keys
+  private_key: "your_private_key_here"
+
+  # HTTP client tuning
+  timeout_ms: 2000
+  keepalive_enabled: true
+  max_idle_conns: 10
+  max_conns_per_host: 10
+
+# Markets to monitor and trade
+markets:
+  # List of market IDs to subscribe to
+  target_market_ids:
+    # Use numeric market IDs exactly as shown in Polymarket URLs
+    - "1765369264423"  # Example market ID
+
+  # Minimum liquidity required (in USD) to consider a market
+  min_liquidity: 10000
+
+# Trading Strategy Parameters
+strategy:
+  # Threshold-based strategy
+  buy_below: 0.45        # Buy when price drops below this
+  sell_above: 0.55       # Sell when price rises above this
+
+  # Position sizing
+  quantity: 100          # Number of contracts per order
+  max_position_size: 500 # Maximum total position across all markets
+
+  # Slippage protection
+  max_slippage_pct: 0.5  # Maximum allowed slippage (%)
+
+  # Strategy mode: "threshold", "market_making", "momentum"
+  mode: "threshold"
+
+# Order Management
+orders:
+  # Rate limiting
+  max_orders_per_second: 5
+  max_orders_per_minute: 100
+
+  # Order batching (set to 1 to disable batching)
+  batch_size: 1
+  batch_interval_ms: 100
+
+  # Order type: "GTC" (Good Till Cancel), "IOC" (Immediate or Cancel), "FOK" (Fill or Kill)
+  default_order_type: "GTC"
+
+  # Maximum outstanding orders at any time
+  max_outstanding: 10
+
+  # Retry configuration
+  max_retries: 3
+  retry_delay_ms: 500
+
+# Risk Management
+risk:
+  # Maximum daily loss (in USD)
+  max_daily_loss: 1000
+
+  # Maximum loss per trade (in USD)
+  max_loss_per_trade: 100
+
+  # Stop trading if daily loss exceeds threshold
+  auto_halt_on_loss: true
+
+  # Maximum exposure per market (in USD)
+  max_exposure_per_market: 5000
+
+# WebSocket Configuration
+websocket:
+  # Buffer sizes (tune for low latency)
+  read_buffer_size: 8192
+  write_buffer_size: 8192
+
+  # Ping/pong for connection health
+  ping_interval_sec: 30
+  pong_timeout_sec: 10
+
+  # Reconnection settings
+  reconnect_enabled: true
+  reconnect_max_attempts: 10
+  reconnect_delay_sec: 5
+
+  # Message handling
+  message_buffer_size: 1000  # Bounded channel size
+
+# Performance Tuning
+performance:
+  # Goroutine count for order processing
+  worker_count: 4
+
+  # GC tuning (GOGC environment variable)
+  gc_percent: 100
+
+  # CPU affinity (leave empty for no pinning)
+  cpu_cores: []  # e.g., [0, 1, 2, 3]
+
+  # Object pool sizes
+  struct_pool_size: 1000
+
+# Monitoring & Metrics
+monitoring:
+  # Enable metrics collection
+  enabled: true
+
+  # Metrics export port (Prometheus-compatible)
+  metrics_port: 9090
+
+  # Latency tracking
+  track_latency: true
+
+  # Auto-halt conditions
+  max_latency_ms: 100        # Halt if latency exceeds this
+  max_error_rate_pct: 5.0    # Halt if error rate exceeds this (%)
+
+  # Logging
+  log_level: "info"          # debug, info, warn, error
+  log_format: "json"         # json or text
+
+# Backtesting (optional)
+backtesting:
+  enabled: false
+  data_source: "subgraph"    # "subgraph", "data_api", or "file"
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+  initial_balance: 10000
+
+# Key Management
+security:
+  # Use vault for key storage
+  use_vault: false
+  vault_endpoint: ""
+  vault_token: ""
+
+  # Remote signer endpoint (optional)
+  remote_signer_enabled: false
+  remote_signer_url: ""
+
+# Deployment
+deployment:
+  # Target region for lowest RTT
+  region: "us-east-1"
+
+  # Environment: "development", "staging", "production"
+  environment: "development"

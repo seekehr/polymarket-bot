@@ -1,0 +1,63 @@
+Metadata-Version: 2.4
+Name: py_builder_signing_sdk
+Version: 0.0.2
+Summary: Python builder signing sdk
+Home-page: https://github.com/Polymarket/py-builder-signing-sdk
+Author: Polymarket Engineering
+Author-email: engineering@polymarket.com
+Maintainer: Polymarket Engineering
+Maintainer-email: engineering@polymarket.com
+Project-URL: Bug Tracker, https://github.com/Polymarket/py-builder-signing-sdk/issues
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: python-dotenv
+Requires-Dist: requests
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: maintainer
+Dynamic: maintainer-email
+Dynamic: project-url
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+# py-builder-signing-sdk
+
+Python SDK for Polymarket builder authentication and signing.
+
+## Installation
+
+```bash
+pip install py-builder-signing-sdk
+```
+
+## Usage
+
+```python
+from py_builder_signing_sdk import BuilderConfig, BuilderApiKeyCreds, RemoteBuilderConfig
+
+# Local signing
+creds = BuilderApiKeyCreds(
+    key="your-api-key",
+    secret="your-secret", 
+    passphrase="your-passphrase"
+)
+config = BuilderConfig(local_builder_creds=creds)
+
+# Remote signing
+remote_config = RemoteBuilderConfig(
+    url="http://localhost:3000/sign",
+    token="your-auth-token"  # optional
+)
+config = BuilderConfig(remote_builder_config=remote_config)
+
+# Generate signed headers
+headers = config.generate_builder_headers("POST", "/order", '{"data": "example"}')
+```
