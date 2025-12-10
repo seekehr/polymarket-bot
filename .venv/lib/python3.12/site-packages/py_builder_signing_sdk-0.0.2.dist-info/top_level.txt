@@ -1,2 +1,0 @@
-py_builder_signing_sdk
-tests

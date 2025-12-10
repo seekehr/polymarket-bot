@@ -1,3 +1,5 @@
+.venv/
+
 # Binaries
 polymarket-bot
 polymarket-bot-*
