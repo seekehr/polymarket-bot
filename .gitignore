@@ -38,3 +38,5 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
+
+scripts/__pycache__/
