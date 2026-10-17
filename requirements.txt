@@ -3,6 +3,8 @@
 #   python3 -m venv .venv
 #   source .venv/bin/activate
 #   pip install -r requirements.txt
-py-clob-client>=0.1.0,<0.2.0
-eth-account>=0.8.0,<0.13.0
+py-clob-client==0.34.6
+eth-account>=0.13.0
+eth-utils>=4.1.1
+py-order-utils>=0.3.2
 pyyaml>=6.0,<7.0

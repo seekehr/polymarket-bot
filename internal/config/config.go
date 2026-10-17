@@ -20,6 +20,7 @@ type Config struct {
 	Performance  PerformanceConfig  `yaml:"performance"`
 	Monitoring   MonitoringConfig   `yaml:"monitoring"`
 	Backtesting  BacktestingConfig  `yaml:"backtesting"`
+	PaperTrading PaperTradingConfig `yaml:"paper_trading"`
 	Security     SecurityConfig     `yaml:"security"`
 	Deployment   DeploymentConfig   `yaml:"deployment"`
 }
@@ -104,6 +105,14 @@ type BacktestingConfig struct {
 	InitialBalance float64 `yaml:"initial_balance"`
 }
 
+// PaperTradingConfig controls simulated trading. When enabled, no orders are
+// sent to Polymarket; fills are simulated against live prices using a virtual balance.
+type PaperTradingConfig struct {
+	Enabled           bool    `yaml:"enabled"`
+	StartingBalance   float64 `yaml:"starting_balance"`
+	ReportIntervalSec int     `yaml:"report_interval_sec"`
+}
+
 type SecurityConfig struct {
 	UseVault            bool   `yaml:"use_vault"`
 	VaultEndpoint       string `yaml:"vault_endpoint"`
@@ -184,6 +193,9 @@ func (c *Config) Validate() error {
 	}
 	if c.WebSocket.MessageBufferSize <= 0 {
 		return fmt.Errorf("websocket.message_buffer_size must be positive")
+	}
+	if c.PaperTrading.Enabled && c.PaperTrading.StartingBalance <= 0 {
+		return fmt.Errorf("paper_trading.starting_balance must be positive")
 	}
 	if c.Performance.WorkerCount <= 0 {
 		return fmt.Errorf("performance.worker_count must be positive")

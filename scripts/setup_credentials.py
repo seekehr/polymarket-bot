@@ -66,6 +66,22 @@ def save_config(config):
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
 
+def normalize_private_key(private_key):
+    """
+    Return the private key as a 0x-prefixed hex string, whichever way it was written.
+
+    Accepts keys with or without 0x/0X, with surrounding whitespace or quotes.
+    An unquoted 0x... key in YAML is parsed as an int, so that's handled too.
+    """
+    if isinstance(private_key, int):
+        return '0x' + format(private_key, '064x')
+
+    key = str(private_key).strip().strip('"\'').strip()
+    if key[:2].lower() == '0x':
+        key = key[2:]
+    return '0x' + key
+
+
 def generate_api_credentials(private_key):
     """
     Generate API credentials from private key using Polymarket CLOB client
@@ -76,9 +92,8 @@ def generate_api_credentials(private_key):
     Returns:
         dict: API credentials containing apiKey, secret, and passphrase
     """
-    # Ensure private key has 0x prefix for eth_account
-    if not private_key.startswith('0x'):
-        private_key = '0x' + private_key
+    # eth_account and the CLOB client expect a 0x-prefixed key
+    private_key = normalize_private_key(private_key)
 
     # Create account from private key
     try:

@@ -241,6 +241,12 @@ func (m *Manager) processResponses(requests []*types.OrderRequest, responses []*
 	defer m.mu.Unlock()
 
 	for i, resp := range responses {
+		// Immediately filled orders (paper trading) are never outstanding;
+		// their exposure is tracked via SetMarketExposure.
+		if resp.Success && resp.Status == "filled" {
+			continue
+		}
+
 		if resp.Success {
 			// Track outstanding order
 			order := &types.Order{
@@ -293,6 +299,13 @@ func (m *Manager) RecordTrade(trade *types.Trade) {
 		m.dailyLoss += -trade.RealizedPnL
 		m.dailyLossMu.Unlock()
 	}
+}
+
+// SetMarketExposure overrides the tracked exposure (in USD) for a market
+func (m *Manager) SetMarketExposure(marketID string, exposure float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.marketExposure[marketID] = exposure
 }
 
 // GetOutstandingOrders returns all outstanding orders

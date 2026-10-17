@@ -16,6 +16,7 @@ import (
 	"github.com/seeker/polymarket-bot/internal/config"
 	"github.com/seeker/polymarket-bot/internal/metrics"
 	"github.com/seeker/polymarket-bot/internal/order"
+	"github.com/seeker/polymarket-bot/internal/paper"
 	"github.com/seeker/polymarket-bot/internal/strategy"
 	"github.com/seeker/polymarket-bot/internal/websocket"
 	"github.com/seeker/polymarket-bot/pkg/types"
@@ -23,6 +24,7 @@ import (
 
 var (
 	configPath = flag.String("config", "config.yml", "Path to configuration file")
+	paperFlag  = flag.Bool("paper", false, "Force paper trading (simulated orders, no real money)")
 	version    = "1.0.0"
 )
 
@@ -37,6 +39,12 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+	if *paperFlag {
+		cfg.PaperTrading.Enabled = true
+		if cfg.PaperTrading.StartingBalance <= 0 {
+			cfg.PaperTrading.StartingBalance = 1000
+		}
 	}
 
 	// Apply performance tuning
@@ -56,6 +64,12 @@ func main() {
 	if err := apiClient.HealthCheck(); err != nil {
 		log.Printf("Warning: API health check failed: %v", err)
 	}
+
+	// Strategy engine
+	strategyEngine := strategy.NewEngine(cfg)
+
+	var orderManager *order.Manager
+	var paperTrader *paper.Trader
 
 	// Order manager with submit function
 	submitFunc := func(requests []*types.OrderRequest) ([]*types.OrderResponse, error) {
@@ -86,10 +100,18 @@ func main() {
 		return responses, nil
 	}
 
-	orderManager := order.NewManager(cfg, submitFunc)
+	if cfg.PaperTrading.Enabled {
+		paperTrader = paper.NewTrader(cfg.PaperTrading.StartingBalance)
+		submitFunc = paperSubmitFunc(paperTrader, strategyEngine, &orderManager, metricsCollector)
+		log.Println("==================================================")
+		log.Println(" PAPER TRADING MODE - no real orders will be sent")
+		log.Printf(" Virtual balance: $%.2f", cfg.PaperTrading.StartingBalance)
+		log.Println("==================================================")
+	} else {
+		log.Println("LIVE TRADING MODE - real orders will be sent with real funds")
+	}
 
-	// Strategy engine
-	strategyEngine := strategy.NewEngine(cfg)
+	orderManager = order.NewManager(cfg, submitFunc)
 
 	// WebSocket client
 	wsClient := websocket.NewClient(cfg)
@@ -108,7 +130,12 @@ func main() {
 	log.Println("WebSocket connected")
 
 	// Start main event loop
-	go eventLoop(ctx, wsClient, strategyEngine, orderManager, metricsCollector)
+	go eventLoop(ctx, wsClient, strategyEngine, orderManager, metricsCollector, paperTrader)
+
+	// Periodically report the paper portfolio
+	if paperTrader != nil {
+		go paperReportLoop(ctx, paperTrader, cfg.PaperTrading.ReportIntervalSec)
+	}
 
 	// Start monitoring loop
 	go monitoringLoop(ctx, metricsCollector, cfg)
@@ -140,11 +167,16 @@ func main() {
 	log.Printf("Total P&L: $%.2f", stats.TotalPnL)
 	log.Printf("Uptime: %s", stats.Uptime)
 
+	if paperTrader != nil {
+		log.Println("\n=== Paper Trading Results ===")
+		logPaperSummary(paperTrader)
+	}
+
 	log.Println("Shutdown complete")
 }
 
 // eventLoop is the main event processing loop
-func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *strategy.Engine, orderManager *order.Manager, metricsCollector *metrics.Collector) {
+func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *strategy.Engine, orderManager *order.Manager, metricsCollector *metrics.Collector, paperTrader *paper.Trader) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -153,6 +185,11 @@ func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *
 		case marketData := <-wsClient.Messages():
 			// Record message
 			metricsCollector.RecordMessage()
+
+			// Value open paper positions at the latest price
+			if paperTrader != nil {
+				paperTrader.Mark(marketData.MarketID, marketData.Price)
+			}
 
 			// Process through strategy
 			startTime := time.Now()
@@ -208,6 +245,71 @@ func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *
 			log.Printf("WebSocket error: %v", err)
 			metricsCollector.RecordError()
 		}
+	}
+}
+
+// paperSubmitFunc returns a submit function that simulates fills instead of calling the API.
+// orderManager is a pointer because the manager is created after its submit function.
+func paperSubmitFunc(trader *paper.Trader, strategyEngine *strategy.Engine, orderManager **order.Manager, metricsCollector *metrics.Collector) order.SubmitFunc {
+	return func(requests []*types.OrderRequest) ([]*types.OrderResponse, error) {
+		responses := make([]*types.OrderResponse, len(requests))
+
+		for i, req := range requests {
+			fill, err := trader.Execute(req)
+			if err != nil {
+				log.Printf("[PAPER] Order rejected: %v", err)
+				metricsCollector.RecordOrder(false)
+				responses[i] = &types.OrderResponse{Success: false, Error: err.Error()}
+				continue
+			}
+
+			// Keep the strategy and risk tracking in sync with the simulated position
+			strategyEngine.UpdatePosition(req.MarketID, fill.Side, fill.Quantity, fill.AvgPrice)
+			(*orderManager).SetMarketExposure(req.MarketID, fill.Exposure)
+			(*orderManager).RecordTrade(fill.Trade)
+			metricsCollector.RecordOrder(true)
+			metricsCollector.RecordTrade(fill.Trade.RealizedPnL)
+
+			log.Printf("[PAPER] Filled %s %d @ %.4f in %s (realized P&L: $%.2f)",
+				req.Side, req.Quantity, req.Price, req.MarketID, fill.Trade.RealizedPnL)
+
+			responses[i] = &types.OrderResponse{
+				Success: true,
+				OrderID: fill.Trade.OrderID,
+				Status:  "filled",
+			}
+		}
+
+		return responses, nil
+	}
+}
+
+// paperReportLoop logs the paper portfolio at a fixed interval
+func paperReportLoop(ctx context.Context, trader *paper.Trader, intervalSec int) {
+	if intervalSec <= 0 {
+		intervalSec = 60
+	}
+	ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			logPaperSummary(trader)
+		}
+	}
+}
+
+// logPaperSummary prints the current paper portfolio
+func logPaperSummary(trader *paper.Trader) {
+	s := trader.Summary()
+	log.Printf("[PAPER] Equity: $%.2f (%+.2f%%) | Cash: $%.2f | Realized: $%.2f | Unrealized: $%.2f | Trades: %d",
+		s.Equity, s.TotalReturnPct, s.Cash, s.RealizedPnL, s.UnrealizedPnL, s.Trades)
+	for _, p := range s.Positions {
+		log.Printf("[PAPER]   %s %s %d @ %.4f (mark %.4f, P&L $%.2f)",
+			p.MarketID, p.Side, p.Quantity, p.AvgPrice, p.MarkPrice, p.UnrealizedPnL)
 	}
 }
 

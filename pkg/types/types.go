@@ -76,6 +76,7 @@ type OrderRequest struct {
 type OrderResponse struct {
 	Success bool   `json:"success"`
 	OrderID string `json:"order_id"`
+	Status  string `json:"status,omitempty"` // "filled" = executed immediately (paper trading)
 	Error   string `json:"error,omitempty"`
 }
 

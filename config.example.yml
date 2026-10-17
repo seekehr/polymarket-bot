@@ -11,7 +11,7 @@ api:
   api_secret: ""
   passphrase: ""
 
-  # Your EOA wallet private key (without 0x prefix)
+  # Your EOA wallet private key (with or without the 0x prefix)
   # WARNING: Keep this secure! Never commit this file with real keys
   private_key: "your_private_key_here"
 
@@ -131,6 +131,16 @@ monitoring:
   # Logging
   log_level: "info"          # debug, info, warn, error
   log_format: "json"         # json or text
+
+# Paper Trading (simulated - no real money)
+# When enabled, the bot uses live Polymarket prices but NEVER sends orders.
+# Fills are simulated instantly at the signal price against a virtual balance,
+# so you need no funds, no API credentials and no private key.
+# Set enabled: false only when you are ready to trade real money.
+paper_trading:
+  enabled: true
+  starting_balance: 1000     # Virtual USDC
+  report_interval_sec: 60    # How often to log the paper portfolio
 
 # Backtesting (optional)
 backtesting:
