@@ -17,4 +17,5 @@ var (
 	logLive   = logging.NewTopic("LIVE", logging.Red)       // live-mode warning
 	logAlert  = logging.NewTopic("ALERT", logging.Yellow)   // metric threshold alerts
 	logStats  = logging.NewTopic("STATS", logging.Blue)     // runtime and final statistics
+	logState  = logging.NewTopic("STATE", logging.Green)    // saving and restoring the paper portfolio
 )

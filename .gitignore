@@ -32,6 +32,9 @@ config.yml
 .DS_Store
 Thumbs.db
 
+# Saved bot state (paper portfolio, etc.)
+data/
+
 # Logs
 *.log
 

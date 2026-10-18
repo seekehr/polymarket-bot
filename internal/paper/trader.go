@@ -64,6 +64,7 @@ type PositionSummary struct {
 	AvgPrice      float64
 	MarkPrice     float64
 	UnrealizedPnL float64
+	Exposure      float64 // USD locked at entry, as reported in Fill.Exposure
 }
 
 // NewTrader creates a paper trader with the given virtual balance (USD)
@@ -215,11 +216,13 @@ func (t *Trader) Summary() *Summary {
 			ps.Side = "long"
 			ps.Quantity = h.Qty
 			ps.UnrealizedPnL = (mark - h.AvgPrice) * float64(h.Qty)
+			ps.Exposure = h.AvgPrice * float64(h.Qty)
 			s.PositionsValue += mark * float64(h.Qty)
 		} else {
 			ps.Side = "short"
 			ps.Quantity = -h.Qty
 			ps.UnrealizedPnL = (h.AvgPrice - mark) * float64(-h.Qty)
+			ps.Exposure = (1 - h.AvgPrice) * float64(-h.Qty)
 			s.PositionsValue += (1 - mark) * float64(-h.Qty)
 		}
 		s.UnrealizedPnL += ps.UnrealizedPnL

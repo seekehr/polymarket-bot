@@ -58,10 +58,14 @@ paper_trading:
   enabled: true
   starting_balance: 1000
   report_interval_sec: 60
+  state_file: data/paper_state.json
 ```
 
 Orders fill instantly at the signal price against the virtual balance, and the
-portfolio gets logged every `report_interval_sec`. No slippage, fees or partial
+portfolio gets logged every `report_interval_sec`. The portfolio (cash, positions,
+trade history) is saved to `data/paper_state.json` (set `state_file` to change
+it) a few seconds after each fill and on shutdown, and restored on the next
+start. Run with `-paper-reset` to start over from `starting_balance`. No slippage, fees or partial
 fills are modelled, so real results will be worse than what you see here.
 
 ## Live trading

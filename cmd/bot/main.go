@@ -23,10 +23,11 @@ import (
 )
 
 var (
-	configPath = flag.String("config", "config.yml", "Path to configuration file")
-	paperFlag  = flag.Bool("paper", false, "Force paper trading (simulated orders, no real money)")
-	colorFlag  = flag.String("color", "auto", "Colorize log output: auto, always or never")
-	version    = "1.0.0"
+	configPath     = flag.String("config", "config.yml", "Path to configuration file")
+	paperFlag      = flag.Bool("paper", false, "Force paper trading (simulated orders, no real money)")
+	colorFlag      = flag.String("color", "auto", "Colorize log output: auto, always or never")
+	paperResetFlag = flag.Bool("paper-reset", false, "Start the paper portfolio from scratch instead of restoring the saved one")
+	version        = "1.0.0"
 )
 
 func main() {
@@ -109,18 +110,26 @@ func main() {
 		return responses, nil
 	}
 
+	statePath := cfg.PaperTrading.StateFile
+	if statePath == "" {
+		statePath = defaultStateFile
+	}
+
 	if cfg.PaperTrading.Enabled {
-		paperTrader = paper.NewTrader(cfg.PaperTrading.StartingBalance)
+		paperTrader = loadPaperTrader(statePath, cfg.PaperTrading.StartingBalance, *paperResetFlag)
 		submitFunc = paperSubmitFunc(paperTrader, strategyEngine, &orderManager, metricsCollector)
 		logPaper.Info(logging.Rainbow("=================================================="))
 		logPaper.Info(logging.Rainbow("PAPER TRADING MODE - no real orders will be sent"))
-		logPaper.Info(logging.Rainbow(fmt.Sprintf("Virtual balance: $%.2f", cfg.PaperTrading.StartingBalance)))
+		logPaper.Info(logging.Rainbow(fmt.Sprintf("Virtual equity: $%.2f", paperTrader.Summary().Equity)))
 		logPaper.Info(logging.Rainbow("=================================================="))
 	} else {
 		logLive.Info("LIVE TRADING MODE - real orders will be sent with real funds")
 	}
 
 	orderManager = order.NewManager(cfg, submitFunc)
+	if paperTrader != nil {
+		syncRestoredPaperState(paperTrader, strategyEngine, orderManager)
+	}
 
 	// WebSocket client
 	wsClient := websocket.NewClient(cfg)
@@ -141,9 +150,13 @@ func main() {
 	// Start main event loop
 	go eventLoop(ctx, wsClient, strategyEngine, orderManager, metricsCollector, paperTrader)
 
-	// Periodically report the paper portfolio
+	// Periodically report and save the paper portfolio
+	saverDone := make(chan struct{})
 	if paperTrader != nil {
 		go paperReportLoop(ctx, paperTrader, cfg.PaperTrading.ReportIntervalSec)
+		go paperSaveLoop(ctx, paperTrader, statePath, saverDone)
+	} else {
+		close(saverDone)
 	}
 
 	// Start monitoring loop
@@ -159,7 +172,7 @@ func main() {
 	<-sigChan
 
 	// Graceful shutdown
-	logSystem.Info("\nShutting down gracefully...")
+	logSystem.Info("Shutting down gracefully...")
 	cancel()
 
 	// Close components
@@ -167,9 +180,16 @@ func main() {
 	orderManager.Close()
 	strategyEngine.Close()
 
+	// Save the paper portfolio once the saver has stopped, so its last
+	// write can't land after this one
+	<-saverDone
+	if paperTrader != nil {
+		savePaperState(paperTrader, statePath)
+	}
+
 	// Print final stats
 	stats := metricsCollector.GetStats()
-	logStats.Info("\n=== Final Statistics ===")
+	logStats.Info("=== Final Statistics ===")
 	logStats.Infof("Messages received: %d", stats.MessagesReceived)
 	logStats.Infof("Orders submitted: %d (success: %d, failed: %d)", stats.OrdersSubmitted, stats.OrdersSuccessful, stats.OrdersFailed)
 	logStats.Infof("Trades executed: %d", stats.TradesExecuted)
@@ -177,7 +197,7 @@ func main() {
 	logStats.Infof("Uptime: %s", stats.Uptime)
 
 	if paperTrader != nil {
-		logPnL.Info("\n=== Paper Trading Results ===")
+		logPnL.Info("=== Paper Trading Results ===")
 		logPaperSummary(paperTrader)
 	}
 

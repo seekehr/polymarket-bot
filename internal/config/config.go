@@ -102,6 +102,7 @@ type PaperTradingConfig struct {
 	Enabled           bool    `yaml:"enabled"`
 	StartingBalance   float64 `yaml:"starting_balance"`
 	ReportIntervalSec int     `yaml:"report_interval_sec"`
+	StateFile         string  `yaml:"state_file"` // where the portfolio is saved between runs
 }
 
 type SecurityConfig struct {

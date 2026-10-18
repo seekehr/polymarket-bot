@@ -141,6 +141,7 @@ paper_trading:
   enabled: true
   starting_balance: 1000     # Virtual USDC
   report_interval_sec: 60    # How often to log the paper portfolio
+  state_file: "data/paper_state.json"  # Portfolio is saved here and restored on startup
 
 # Key Management
 security:
