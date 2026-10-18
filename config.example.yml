@@ -15,6 +15,21 @@ api:
   # WARNING: Keep this secure! Never commit this file with real keys
   private_key: "your_private_key_here"
 
+  # Which wallet holds your funds, and how the key signs for it:
+  #   0 = the private key's own address (EOA)
+  #   1 = Polymarket proxy wallet (email/magic login)
+  #   2 = Polymarket Gnosis Safe (browser wallet login)
+  #   3 = deposit wallet (smart contract wallet)
+  # For 1-3, set funder_address to the wallet shown on polymarket.com
+  # (your profile address), not the key's address.
+  # scripts/setup_credentials.py detects and fills in both for you.
+  signature_type: 0
+  funder_address: ""
+
+  # Account feed (order and fill updates) and positions API for live trading
+  user_websocket_url: "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+  data_api_url: "https://data-api.polymarket.com"
+
   # HTTP client tuning
   timeout_ms: 2000
   keepalive_enabled: true
@@ -25,8 +40,8 @@ api:
 markets:
   # List of market IDs to subscribe to
   target_market_ids:
-    # Use numeric market IDs exactly as shown in Polymarket URLs
-    - "1765369264423"  # Example market ID
+    # CLOB token IDs (the long numbers for one outcome), not the IDs in polymarket.com URLs
+    - "1765369264423"  # Example only: replace with a real token ID
 
   # Minimum liquidity required (in USD) to consider a market
   min_liquidity: 10000
@@ -57,7 +72,8 @@ orders:
   batch_size: 1
   batch_interval_ms: 100
 
-  # Order type: "GTC" (Good Till Cancel), "IOC" (Immediate or Cancel), "FOK" (Fill or Kill)
+  # Order type: "GTC" (rests until filled or cancelled), "FAK" (fill what you
+  # can now, cancel the rest; "IOC" is accepted as an alias), "FOK" (all or nothing)
   default_order_type: "GTC"
 
   # Maximum outstanding orders at any time
@@ -142,6 +158,10 @@ paper_trading:
   starting_balance: 1000     # Virtual USDC
   report_interval_sec: 60    # How often to log the paper portfolio
   state_file: "data/paper_state.json"  # Portfolio is saved here and restored on startup
+
+# Live Trading (used when paper_trading.enabled is false)
+live_trading:
+  journal_file: "data/live_trades.jsonl"  # Every live fill, appended as it happens
 
 # Key Management
 security:

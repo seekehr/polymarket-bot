@@ -20,20 +20,26 @@ type Config struct {
 	Performance  PerformanceConfig  `yaml:"performance"`
 	Monitoring   MonitoringConfig   `yaml:"monitoring"`
 	PaperTrading PaperTradingConfig `yaml:"paper_trading"`
+	LiveTrading  LiveTradingConfig  `yaml:"live_trading"`
 	Security     SecurityConfig     `yaml:"security"`
 	Deployment   DeploymentConfig   `yaml:"deployment"`
 }
 
 type APIConfig struct {
-	RESTEndpoint      string `yaml:"rest_endpoint"`
-	WebSocketURL      string `yaml:"websocket_url"`
-	APIKey            string `yaml:"api_key"`
-	APISecret         string `yaml:"api_secret"`
-	Passphrase        string `yaml:"passphrase"`
-	TimeoutMS         int    `yaml:"timeout_ms"`
-	KeepaliveEnabled  bool   `yaml:"keepalive_enabled"`
-	MaxIdleConns      int    `yaml:"max_idle_conns"`
-	MaxConnsPerHost   int    `yaml:"max_conns_per_host"`
+	RESTEndpoint     string `yaml:"rest_endpoint"`
+	WebSocketURL     string `yaml:"websocket_url"`
+	APIKey           string `yaml:"api_key"`
+	APISecret        string `yaml:"api_secret"`
+	Passphrase       string `yaml:"passphrase"`
+	PrivateKey       string `yaml:"private_key"`        // signs orders; never sent anywhere
+	FunderAddress    string `yaml:"funder_address"`     // wallet holding funds, if not the key's own address
+	SignatureType    int    `yaml:"signature_type"`     // 0 EOA, 1 proxy, 2 Gnosis Safe, 3 deposit wallet
+	UserWebSocketURL string `yaml:"user_websocket_url"` // order and fill updates for live trading
+	DataAPIURL       string `yaml:"data_api_url"`       // positions lookup
+	TimeoutMS        int    `yaml:"timeout_ms"`
+	KeepaliveEnabled bool   `yaml:"keepalive_enabled"`
+	MaxIdleConns     int    `yaml:"max_idle_conns"`
+	MaxConnsPerHost  int    `yaml:"max_conns_per_host"`
 }
 
 type MarketsConfig struct {
@@ -42,12 +48,12 @@ type MarketsConfig struct {
 }
 
 type StrategyConfig struct {
-	BuyBelow         float64 `yaml:"buy_below"`
-	SellAbove        float64 `yaml:"sell_above"`
-	Quantity         int     `yaml:"quantity"`
-	MaxPositionSize  int     `yaml:"max_position_size"`
-	MaxSlippagePct   float64 `yaml:"max_slippage_pct"`
-	Mode             string  `yaml:"mode"`
+	BuyBelow        float64 `yaml:"buy_below"`
+	SellAbove       float64 `yaml:"sell_above"`
+	Quantity        int     `yaml:"quantity"`
+	MaxPositionSize int     `yaml:"max_position_size"`
+	MaxSlippagePct  float64 `yaml:"max_slippage_pct"`
+	Mode            string  `yaml:"mode"`
 }
 
 type OrdersConfig struct {
@@ -62,10 +68,10 @@ type OrdersConfig struct {
 }
 
 type RiskConfig struct {
-	MaxDailyLoss          float64 `yaml:"max_daily_loss"`
-	MaxLossPerTrade       float64 `yaml:"max_loss_per_trade"`
-	AutoHaltOnLoss        bool    `yaml:"auto_halt_on_loss"`
-	MaxExposurePerMarket  float64 `yaml:"max_exposure_per_market"`
+	MaxDailyLoss         float64 `yaml:"max_daily_loss"`
+	MaxLossPerTrade      float64 `yaml:"max_loss_per_trade"`
+	AutoHaltOnLoss       bool    `yaml:"auto_halt_on_loss"`
+	MaxExposurePerMarket float64 `yaml:"max_exposure_per_market"`
 }
 
 type WebSocketConfig struct {
@@ -80,20 +86,20 @@ type WebSocketConfig struct {
 }
 
 type PerformanceConfig struct {
-	WorkerCount     int   `yaml:"worker_count"`
-	GCPercent       int   `yaml:"gc_percent"`
-	CPUCores        []int `yaml:"cpu_cores"`
-	StructPoolSize  int   `yaml:"struct_pool_size"`
+	WorkerCount    int   `yaml:"worker_count"`
+	GCPercent      int   `yaml:"gc_percent"`
+	CPUCores       []int `yaml:"cpu_cores"`
+	StructPoolSize int   `yaml:"struct_pool_size"`
 }
 
 type MonitoringConfig struct {
-	Enabled          bool    `yaml:"enabled"`
-	MetricsPort      int     `yaml:"metrics_port"`
-	TrackLatency     bool    `yaml:"track_latency"`
-	MaxLatencyMS     int     `yaml:"max_latency_ms"`
-	MaxErrorRatePct  float64 `yaml:"max_error_rate_pct"`
-	LogLevel         string  `yaml:"log_level"`
-	LogFormat        string  `yaml:"log_format"`
+	Enabled         bool    `yaml:"enabled"`
+	MetricsPort     int     `yaml:"metrics_port"`
+	TrackLatency    bool    `yaml:"track_latency"`
+	MaxLatencyMS    int     `yaml:"max_latency_ms"`
+	MaxErrorRatePct float64 `yaml:"max_error_rate_pct"`
+	LogLevel        string  `yaml:"log_level"`
+	LogFormat       string  `yaml:"log_format"`
 }
 
 // PaperTradingConfig controls simulated trading. When enabled, no orders are
@@ -103,6 +109,46 @@ type PaperTradingConfig struct {
 	StartingBalance   float64 `yaml:"starting_balance"`
 	ReportIntervalSec int     `yaml:"report_interval_sec"`
 	StateFile         string  `yaml:"state_file"` // where the portfolio is saved between runs
+}
+
+// applyDefaults fills in settings older config files don't have.
+func (c *Config) applyDefaults() {
+	if c.API.UserWebSocketURL == "" {
+		c.API.UserWebSocketURL = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+	}
+	if c.API.DataAPIURL == "" {
+		c.API.DataAPIURL = "https://data-api.polymarket.com"
+	}
+	if c.LiveTrading.JournalFile == "" {
+		c.LiveTrading.JournalFile = "data/live_trades.jsonl"
+	}
+	if c.PaperTrading.StateFile == "" {
+		c.PaperTrading.StateFile = "data/paper_state.json"
+	}
+}
+
+// LiveTradingConfig controls real-money trading state kept on disk.
+type LiveTradingConfig struct {
+	JournalFile string `yaml:"journal_file"` // append-only log of live fills
+}
+
+// ValidateLive checks the settings live trading needs. It is separate from
+// Validate so paper trading works without credentials.
+func (c *Config) ValidateLive() error {
+	a := &c.API
+	if a.APIKey == "" || a.APISecret == "" || a.Passphrase == "" {
+		return fmt.Errorf("api.api_key, api.api_secret and api.passphrase are required for live trading (run scripts/setup_credentials.py)")
+	}
+	if a.PrivateKey == "" || a.PrivateKey == "your_private_key_here" {
+		return fmt.Errorf("api.private_key is required for live trading")
+	}
+	if a.SignatureType < 0 || a.SignatureType > 3 {
+		return fmt.Errorf("api.signature_type must be 0, 1, 2 or 3")
+	}
+	if a.SignatureType != 0 && a.FunderAddress == "" {
+		return fmt.Errorf("api.funder_address is required when api.signature_type is %d", a.SignatureType)
+	}
+	return nil
 }
 
 type SecurityConfig struct {
@@ -132,6 +178,8 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
+
+	cfg.applyDefaults()
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {

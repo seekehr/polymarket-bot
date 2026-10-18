@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -81,39 +82,13 @@ func main() {
 	var orderManager *order.Manager
 	var paperTrader *paper.Trader
 
-	// Order manager with submit function
-	submitFunc := func(requests []*types.OrderRequest) ([]*types.OrderResponse, error) {
-		responses := make([]*types.OrderResponse, len(requests))
-
-		for i, req := range requests {
-			startTime := time.Now()
-
-			resp, err := apiClient.PlaceOrder(req)
-			if err != nil {
-				metricsCollector.RecordOrder(false)
-				metricsCollector.RecordError()
-				responses[i] = &types.OrderResponse{
-					Success: false,
-					Error:   err.Error(),
-				}
-				continue
-			}
-
-			// Record metrics
-			latency := time.Since(startTime)
-			metricsCollector.RecordLatency(latency)
-			metricsCollector.RecordOrder(true)
-
-			responses[i] = resp
-		}
-
-		return responses, nil
-	}
+	// Create context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	statePath := cfg.PaperTrading.StateFile
-	if statePath == "" {
-		statePath = defaultStateFile
-	}
+	var liveT *liveTrading
+	var submitFunc order.SubmitFunc
 
 	if cfg.PaperTrading.Enabled {
 		paperTrader = loadPaperTrader(statePath, cfg.PaperTrading.StartingBalance, *paperResetFlag)
@@ -124,19 +99,20 @@ func main() {
 		logPaper.Info(logging.Rainbow("=================================================="))
 	} else {
 		logLive.Info("LIVE TRADING MODE - real orders will be sent with real funds")
+		liveT = startLive(ctx, cfg, apiClient, strategyEngine, metricsCollector)
+		submitFunc = liveT.submitFunc()
 	}
 
 	orderManager = order.NewManager(cfg, submitFunc)
 	if paperTrader != nil {
 		syncRestoredPaperState(paperTrader, strategyEngine, orderManager)
 	}
+	if liveT != nil {
+		liveT.attach(ctx, orderManager)
+	}
 
 	// WebSocket client
 	wsClient := websocket.NewClient(cfg)
-
-	// Create context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Start components
 	logSystem.Info("Starting bot...")
@@ -200,6 +176,11 @@ func main() {
 		logPnL.Info("=== Paper Trading Results ===")
 		logPaperSummary(paperTrader)
 	}
+	if liveT != nil {
+		logPnL.Info("=== Live Trading Results ===")
+		liveT.logSummary()
+		liveT.close()
+	}
 
 	logSystem.Info("Shutdown complete")
 }
@@ -256,7 +237,9 @@ func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *
 
 			// Submit order
 			if err := orderManager.SubmitOrder(orderReq); err != nil {
-				logOrder.Errorf("Order submission failed: %v", err)
+				if !errors.Is(err, order.ErrSkipped) {
+					logOrder.Errorf("Order submission failed: %v", err)
+				}
 				continue
 			}
 

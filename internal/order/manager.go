@@ -2,6 +2,7 @@ package order
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -28,6 +29,13 @@ type Manager struct {
 	dailyLossMu     sync.RWMutex
 	marketExposure  map[string]float64
 }
+
+// StatusSkipped marks a response for an order the submit function chose not
+// to send (for example, one already covered by a resting order).
+const StatusSkipped = "skipped"
+
+// ErrSkipped is returned by SubmitOrder when the order was deliberately not sent.
+var ErrSkipped = errors.New("order skipped")
 
 // SubmitFunc is a function that submits orders to the API
 type SubmitFunc func([]*types.OrderRequest) ([]*types.OrderResponse, error)
@@ -229,6 +237,9 @@ func (m *Manager) submitImmediate(requests []*types.OrderRequest) error {
 
 		// Process responses
 		m.processResponses(requests, responses)
+		if len(responses) == 1 && responses[0] != nil && responses[0].Status == StatusSkipped {
+			return ErrSkipped
+		}
 		return nil
 	}
 
@@ -243,7 +254,7 @@ func (m *Manager) processResponses(requests []*types.OrderRequest, responses []*
 	for i, resp := range responses {
 		// Immediately filled orders (paper trading) are never outstanding;
 		// their exposure is tracked via SetMarketExposure.
-		if resp.Success && resp.Status == "filled" {
+		if resp.Success && (resp.Status == "filled" || resp.Status == "unmatched") {
 			continue
 		}
 
@@ -298,6 +309,17 @@ func (m *Manager) RecordTrade(trade *types.Trade) {
 		m.dailyLossMu.Lock()
 		m.dailyLoss += -trade.RealizedPnL
 		m.dailyLossMu.Unlock()
+	}
+}
+
+// SyncOutstanding replaces the tracked outstanding orders with the given
+// set, e.g. the orders already resting on the exchange at startup.
+func (m *Manager) SyncOutstanding(orders []*types.Order) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.outstandingOrders = make(map[string]*types.Order, len(orders))
+	for _, o := range orders {
+		m.outstandingOrders[o.ID] = o
 	}
 }
 

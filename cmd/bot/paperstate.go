@@ -9,10 +9,7 @@ import (
 	"github.com/seeker/polymarket-bot/internal/strategy"
 )
 
-const (
-	defaultStateFile  = "data/paper_state.json"
-	stateSaveInterval = 5 * time.Second
-)
+const stateSaveInterval = 5 * time.Second
 
 // loadPaperTrader restores the paper portfolio saved at path, or starts a new
 // one if there is none (or reset is set). A file that exists but can't be read

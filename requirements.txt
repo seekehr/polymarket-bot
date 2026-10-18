@@ -5,6 +5,7 @@
 #   pip install -r requirements.txt
 py-clob-client==0.34.6
 eth-account>=0.13.0
+eth-abi>=5.0.0
 eth-utils>=4.1.1
 py-order-utils>=0.3.2
 pyyaml>=6.0,<7.0

@@ -33,8 +33,23 @@ python scripts/setup_credentials.py
 ```
 
 It derives your API keys from the private key and writes `api_key`,
-`api_secret` and `passphrase` into `config.yml`. You can skip this for paper
-trading.
+`api_secret` and `passphrase` into `config.yml`. It also works out which wallet
+holds your funds and sets `api.signature_type` and `api.funder_address` for you:
+every Polymarket wallet type (proxy, Safe, deposit wallet, or the key's own
+address) has an address derived from your key, so the script computes each
+one and picks the one with activity on Polymarket. If it can't tell (a brand-new
+account, or more than one wallet in use), copy your wallet address from the
+profile menu on polymarket.com and pass it in:
+
+```bash
+python scripts/setup_credentials.py --wallet 0xYourWalletAddress
+```
+
+It refuses a wallet your key doesn't own. The private key has to be the
+account owner's: deposit wallet session keys aren't supported. You can skip
+all of this for paper trading.
+
+The script rewrites `config.yml` with PyYAML, so comments in it are dropped.
 
 ## Running
 
@@ -70,12 +85,34 @@ fills are modelled, so real results will be worse than what you see here.
 
 ## Live trading
 
-Only do this with money you can afford to lose. You'll need USDC on Polygon in
-your wallet and a little POL for gas.
+Only do this with money you can afford to lose.
 
 1. Set up your private key and API credentials (see Setup above). You can also
    use `${ENV_VAR}` syntax in `config.yml` to keep the key out of the file.
-2. Set `paper_trading.enabled: false`.
+2. Check `api.signature_type` and `api.funder_address`, which the script fills
+   in (see the comments in `config.example.yml` to set them by hand).
+3. Make sure that wallet has pUSD (Polymarket's collateral since the April 2026
+   V2 upgrade) and the exchange approvals in place. Trading once on
+   polymarket.com with the same wallet sets this up; the bot doesn't do it.
+4. Set `paper_trading.enabled: false`.
+
+On startup the bot checks every target market is tradable, loads your real
+positions and resting orders from Polymarket, and connects to your account
+feed. If any of that fails it refuses to start. While running:
+
+- Orders are signed locally (EIP-712, Polymarket CLOB V2) and posted to the CLOB.
+- Fills and order updates arrive over the account websocket and update the
+  positions the strategy and risk limits see. After a reconnect, missed fills
+  are fetched over REST.
+- Every fill is appended to `data/live_trades.jsonl`, with a new line each
+  time its settlement status changes. Today's realized losses are read back
+  from it on restart, so `max_daily_loss` survives restarts.
+- Polymarket has no shorting: sells are capped at the shares you hold, and a
+  "sell" signal with nothing held is skipped.
+- Only one order per market and side is kept working at a time.
+
+Orders still resting when you stop the bot stay on the book and can fill.
+P&L figures exclude fees.
 
 `config.yml` is gitignored. Keep it that way.
 
