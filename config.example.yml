@@ -29,6 +29,7 @@ api:
   # Account feed (order and fill updates) and positions API for live trading
   user_websocket_url: "wss://ws-subscriptions-clob.polymarket.com/ws/user"
   data_api_url: "https://data-api.polymarket.com"
+  gamma_api_url: "https://gamma-api.polymarket.com"  # resolves market links
 
   # HTTP client tuning
   timeout_ms: 2000
@@ -40,8 +41,8 @@ api:
 markets:
   # List of market IDs to subscribe to
   target_market_ids:
-    # CLOB token IDs (the long numbers for one outcome), not the IDs in polymarket.com URLs
-    - "1765369264423"  # Example only: replace with a real token ID
+    # polymarket.com market links (add #Outcome to trade one side), or CLOB token IDs
+    - "https://polymarket.com/event/xi-jinping-out-before-2027#Yes"  # Example only: use your own market
 
   # Minimum liquidity required (in USD) to consider a market
   min_liquidity: 10000

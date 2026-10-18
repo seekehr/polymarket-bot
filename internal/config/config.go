@@ -36,6 +36,7 @@ type APIConfig struct {
 	SignatureType    int    `yaml:"signature_type"`     // 0 EOA, 1 proxy, 2 Gnosis Safe, 3 deposit wallet
 	UserWebSocketURL string `yaml:"user_websocket_url"` // order and fill updates for live trading
 	DataAPIURL       string `yaml:"data_api_url"`       // positions lookup
+	GammaAPIURL      string `yaml:"gamma_api_url"`      // resolves polymarket.com links to token IDs
 	TimeoutMS        int    `yaml:"timeout_ms"`
 	KeepaliveEnabled bool   `yaml:"keepalive_enabled"`
 	MaxIdleConns     int    `yaml:"max_idle_conns"`
@@ -115,6 +116,9 @@ type PaperTradingConfig struct {
 func (c *Config) applyDefaults() {
 	if c.API.UserWebSocketURL == "" {
 		c.API.UserWebSocketURL = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+	}
+	if c.API.GammaAPIURL == "" {
+		c.API.GammaAPIURL = "https://gamma-api.polymarket.com"
 	}
 	if c.API.DataAPIURL == "" {
 		c.API.DataAPIURL = "https://data-api.polymarket.com"

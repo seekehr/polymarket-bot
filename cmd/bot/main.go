@@ -90,6 +90,12 @@ func main() {
 	var liveT *liveTrading
 	var submitFunc order.SubmitFunc
 
+	// Turn any polymarket.com links into token IDs before the feed, strategy
+	// and live trading read the list
+	targets, labels := resolveTargets(apiClient, cfg.Markets.TargetMarketIDs)
+	cfg.Markets.TargetMarketIDs = targets
+	checkMarkets(apiClient, targets, labels)
+
 	if cfg.PaperTrading.Enabled {
 		paperTrader = loadPaperTrader(statePath, cfg.PaperTrading.StartingBalance, *paperResetFlag)
 		submitFunc = paperSubmitFunc(paperTrader, strategyEngine, &orderManager, metricsCollector)

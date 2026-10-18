@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,22 +46,6 @@ func startLive(ctx context.Context, cfg *config.Config, client *api.Client, stra
 		logConfig.Fatalf("%v", err)
 	}
 	logLive.Infof("Signing as %s, funds in %s (signature type %d)", client.SignerAddress(), client.MakerAddress(), cfg.API.SignatureType)
-
-	version, err := client.Version()
-	if err != nil {
-		logAPI.Fatalf("%v", err)
-	}
-	for _, id := range cfg.Markets.TargetMarketIDs {
-		tick, err := client.TickSize(id)
-		if err != nil {
-			logAPI.Fatalf("Market %s isn't tradable: %v (target_market_ids must be CLOB token IDs)", short(id), err)
-		}
-		negRisk, err := client.NegRisk(id)
-		if err != nil {
-			logAPI.Fatalf("%v", err)
-		}
-		logAPI.Infof("Market %s: tick %s, neg-risk %v, exchange v%d", short(id), tick, negRisk, version)
-	}
 
 	journal, err := live.OpenJournal(cfg.LiveTrading.JournalFile)
 	if err != nil {
@@ -288,6 +273,63 @@ func (l *liveTrading) logSummary() {
 func (l *liveTrading) close() {
 	if err := l.journal.Close(); err != nil {
 		logState.Errorf("%v", err)
+	}
+}
+
+// resolveTargets expands polymarket.com links in target_market_ids into
+// token IDs, keeping plain token IDs as they are. It returns the IDs, without
+// duplicates, and a readable label for each resolved one.
+func resolveTargets(client *api.Client, refs []string) ([]string, map[string]string) {
+	var ids []string
+	labels := make(map[string]string)
+	seen := make(map[string]bool)
+	add := func(id string) {
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if !api.IsMarketURL(ref) {
+			add(ref)
+			continue
+		}
+		tokens, err := client.ResolveMarketURL(ref)
+		if err != nil {
+			logConfig.Fatalf("Can't resolve market link: %v", err)
+		}
+		for _, t := range tokens {
+			add(t.TokenID)
+			labels[t.TokenID] = fmt.Sprintf("%s / %s", t.Question, t.Outcome)
+			logConfig.Infof("Resolved %s -> %s: %s", t.Slug, t.Outcome, t.TokenID)
+		}
+	}
+	return ids, labels
+}
+
+// checkMarkets makes sure every target market exists on the CLOB, so a bad
+// token ID fails at startup instead of silently receiving no prices. It only
+// uses public endpoints, so it runs in paper mode too.
+func checkMarkets(client *api.Client, ids []string, labels map[string]string) {
+	version, err := client.Version()
+	if err != nil {
+		logAPI.Fatalf("%v", err)
+	}
+	for _, id := range ids {
+		tick, err := client.TickSize(id)
+		if err != nil {
+			logAPI.Fatalf("Market %s not found: %v (use a CLOB token ID or a polymarket.com market link; see the README)", short(id), err)
+		}
+		negRisk, err := client.NegRisk(id)
+		if err != nil {
+			logAPI.Fatalf("%v", err)
+		}
+		name := short(id)
+		if l, ok := labels[id]; ok {
+			name = fmt.Sprintf("%s (%s)", name, l)
+		}
+		logAPI.Infof("Market %s: tick %s, neg-risk %v, exchange v%d", name, tick, negRisk, version)
 	}
 }
 

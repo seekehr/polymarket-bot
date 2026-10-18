@@ -22,6 +22,7 @@ type Client struct {
 	httpClient *http.Client
 	baseURL    string
 	dataURL    string
+	gammaURL   string
 	apiKey     string
 	apiSecret  string
 	passphrase string
@@ -57,6 +58,7 @@ func NewClient(cfg *config.Config) *Client {
 		httpClient: httpClient,
 		baseURL:    strings.TrimRight(cfg.API.RESTEndpoint, "/"),
 		dataURL:    strings.TrimRight(cfg.API.DataAPIURL, "/"),
+		gammaURL:   strings.TrimRight(cfg.API.GammaAPIURL, "/"),
 		apiKey:     cfg.API.APIKey,
 		apiSecret:  cfg.API.APISecret,
 		passphrase: cfg.API.Passphrase,

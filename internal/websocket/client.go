@@ -5,13 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/seeker/polymarket-bot/internal/config"
+	"github.com/seeker/polymarket-bot/internal/logging"
 	"github.com/seeker/polymarket-bot/pkg/types"
 )
+
+var logWS = logging.NewTopic("WS", logging.Cyan)
 
 // Client manages WebSocket connection to Polymarket
 type Client struct {
@@ -26,7 +31,14 @@ type Client struct {
 	reconnect bool
 	ctx       context.Context
 	cancel    context.CancelFunc
-	pool      sync.Pool // Object pool for MarketData structs
+
+	quotes  map[string]*quote // latest top of book per subscribed token
+	targets map[string]bool   // tokens we subscribed to; the feed also sends their siblings
+}
+
+// quote is the latest best bid/ask and trade price for one token.
+type quote struct {
+	bid, ask, last float64
 }
 
 // NewClient creates a new WebSocket client
@@ -42,11 +54,8 @@ func NewClient(cfg *config.Config) *Client {
 		reconnect: cfg.WebSocket.ReconnectEnabled,
 		ctx:       ctx,
 		cancel:    cancel,
-		pool: sync.Pool{
-			New: func() interface{} {
-				return &types.MarketData{}
-			},
-		},
+		quotes:    make(map[string]*quote),
+		targets:   targetSet(cfg.Markets.TargetMarketIDs),
 	}
 }
 
@@ -97,7 +106,7 @@ func (c *Client) subscribe() error {
 	}
 
 	if raw, err := json.Marshal(msg); err == nil {
-		fmt.Printf("WebSocket subscribe payload: %s\n", string(raw))
+		logWS.Debugf("Subscribe payload: %s", raw)
 	}
 
 	if err := c.conn.WriteJSON(msg); err != nil {
@@ -140,79 +149,181 @@ func (c *Client) readPump() {
 	}
 }
 
-// processMessage decodes WebSocket message and pushes to channel
-func (c *Client) processMessage(raw []byte) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return
-	}
-
-	// Helpful debug output (truncated to avoid log spam)
-	const maxLogLen = 512
-	logSnippet := trimmed
-	if len(logSnippet) > maxLogLen {
-		logSnippet = logSnippet[:maxLogLen]
-	}
-	fmt.Printf("WebSocket message (%d bytes): %s\n", len(trimmed), string(logSnippet))
-
-	// The Polymarket feed can return an array of updates; handle both array and object.
-	if trimmed[0] == '[' {
-		var arr []map[string]interface{}
-		if err := json.Unmarshal(trimmed, &arr); err != nil {
-			c.errChan <- fmt.Errorf("failed to unmarshal array message: %w", err)
-			return
-		}
-		for _, item := range arr {
-			c.handleDataItem(item)
-		}
-		return
-	}
-
-	var wsMsg types.WebSocketMessage
-	if err := json.Unmarshal(trimmed, &wsMsg); err != nil {
-		c.errChan <- fmt.Errorf("failed to unmarshal message: %w", err)
-		return
-	}
-
-	if m, ok := wsMsg.Data.(map[string]interface{}); ok {
-		c.handleDataItem(m)
-		return
-	}
-
-	// If Data is not an object, drop with notice.
-	c.errChan <- fmt.Errorf("unexpected data format: %T", wsMsg.Data)
+// marketEvent covers the market channel's event types: book, price_change,
+// last_trade_price, best_bid_ask and tick_size_change.
+type marketEvent struct {
+	EventType    string        `json:"event_type"`
+	AssetID      string        `json:"asset_id"`
+	Bids         []priceLevel  `json:"bids"`
+	Asks         []priceLevel  `json:"asks"`
+	PriceChanges []priceChange `json:"price_changes"`
+	Price        string        `json:"price"`
+	Size         string        `json:"size"`
+	BestBid      string        `json:"best_bid"`
+	BestAsk      string        `json:"best_ask"`
+	Timestamp    string        `json:"timestamp"` // unix milliseconds
 }
 
-// handleDataItem converts a generic map into MarketData and publishes it.
-func (c *Client) handleDataItem(item map[string]interface{}) {
-	// Get struct from pool to reduce GC pressure
-	data := c.pool.Get().(*types.MarketData)
-	defer c.pool.Put(data)
+type priceLevel struct {
+	Price string `json:"price"`
+	Size  string `json:"size"`
+}
 
-	dataBytes, err := json.Marshal(item)
-	if err != nil {
-		c.errChan <- fmt.Errorf("failed to marshal data item: %w", err)
+type priceChange struct {
+	AssetID string `json:"asset_id"`
+	BestBid string `json:"best_bid"`
+	BestAsk string `json:"best_ask"`
+}
+
+// processMessage decodes one frame (an event or an array of events) and
+// publishes a price update for each subscribed token whose quote changed.
+func (c *Client) processMessage(raw []byte) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "PONG" {
 		return
 	}
+	logWS.Debugf("Message (%d bytes): %.512s", len(trimmed), trimmed)
 
-	if err := json.Unmarshal(dataBytes, data); err != nil {
-		c.errChan <- fmt.Errorf("failed to unmarshal market data: %w", err)
-		return
+	var events []marketEvent
+	if trimmed[0] == '[' {
+		if err := json.Unmarshal(trimmed, &events); err != nil {
+			c.errChan <- fmt.Errorf("failed to parse market message: %w", err)
+			return
+		}
+	} else {
+		var ev marketEvent
+		if err := json.Unmarshal(trimmed, &ev); err != nil {
+			c.errChan <- fmt.Errorf("failed to parse market message: %w", err)
+			return
+		}
+		events = []marketEvent{ev}
 	}
 
-	data.LastUpdated = time.Now()
+	for _, ev := range events {
+		for _, id := range c.applyEvent(&ev) {
+			c.publish(id, parseMillis(ev.Timestamp))
+		}
+	}
+}
+
+// applyEvent updates the quotes and returns the tokens it changed.
+func (c *Client) applyEvent(ev *marketEvent) []string {
+	kind := ev.EventType
+	switch { // book snapshots on subscribe arrive without event_type
+	case kind == "" && (ev.Bids != nil || ev.Asks != nil):
+		kind = "book"
+	case kind == "" && ev.PriceChanges != nil:
+		kind = "price_change"
+	}
+
+	switch kind {
+	case "book":
+		q := c.quote(ev.AssetID)
+		if q == nil {
+			return nil
+		}
+		q.bid, q.ask = 0, 0
+		for _, l := range ev.Bids {
+			q.bid = max(q.bid, parseFloat(l.Price))
+		}
+		for _, l := range ev.Asks {
+			if p := parseFloat(l.Price); p > 0 && (q.ask == 0 || p < q.ask) {
+				q.ask = p
+			}
+		}
+		return []string{ev.AssetID}
+	case "price_change":
+		var changed []string
+		for _, pc := range ev.PriceChanges {
+			if q := c.quote(pc.AssetID); q != nil {
+				q.bid, q.ask = parseFloat(pc.BestBid), parseFloat(pc.BestAsk)
+				changed = append(changed, pc.AssetID)
+			}
+		}
+		return changed
+	case "best_bid_ask":
+		if q := c.quote(ev.AssetID); q != nil {
+			q.bid, q.ask = parseFloat(ev.BestBid), parseFloat(ev.BestAsk)
+			return []string{ev.AssetID}
+		}
+	case "last_trade_price":
+		if q := c.quote(ev.AssetID); q != nil {
+			q.last = parseFloat(ev.Price)
+			return []string{ev.AssetID}
+		}
+	}
+	return nil // tick_size_change and anything new: nothing to price
+}
+
+// quote returns the state for a subscribed token, or nil for others.
+func (c *Client) quote(assetID string) *quote {
+	if !c.targets[assetID] {
+		return nil
+	}
+	q := c.quotes[assetID]
+	if q == nil {
+		q = &quote{}
+		c.quotes[assetID] = q
+	}
+	return q
+}
+
+// publish sends the token's current quote to the strategy. Price is the
+// bid/ask midpoint, or the last trade when one side of the book is empty.
+func (c *Client) publish(assetID string, ts time.Time) {
+	q := c.quotes[assetID]
+	price := q.last
+	if q.bid > 0 && q.ask > 0 {
+		price = (q.bid + q.ask) / 2
+	}
+	if price <= 0 {
+		return
+	}
+	data := &types.MarketData{
+		MarketID:    assetID,
+		Price:       price,
+		BidPrice:    q.bid,
+		AskPrice:    q.ask,
+		Timestamp:   ts,
+		LastUpdated: time.Now(),
+	}
 
 	// Non-blocking send to avoid slowdown
 	select {
 	case c.msgChan <- data:
 	default:
-		c.errChan <- fmt.Errorf("message channel full, dropping message for market %s", data.MarketID)
+		c.errChan <- fmt.Errorf("message channel full, dropping message for market %s", assetID)
 	}
+}
+
+func targetSet(ids []string) map[string]bool {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
+}
+
+func parseFloat(s string) float64 {
+	v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	return v
+}
+
+func parseMillis(s string) time.Time {
+	ms, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil || ms <= 0 {
+		return time.Now()
+	}
+	return time.UnixMilli(ms)
 }
 
 // pingHandler sends periodic pings to keep connection alive
 func (c *Client) pingHandler() {
-	ticker := time.NewTicker(time.Duration(c.cfg.PingIntervalSec) * time.Second)
+	interval := time.Duration(c.cfg.PingIntervalSec) * time.Second
+	if interval <= 0 || interval > 10*time.Second {
+		interval = 10 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -222,8 +333,8 @@ func (c *Client) pingHandler() {
 		case <-ticker.C:
 			c.mu.Lock()
 			if c.conn != nil {
-				deadline := time.Now().Add(time.Duration(c.cfg.PongTimeoutSec) * time.Second)
-				if err := c.conn.WriteControl(websocket.PingMessage, []byte{}, deadline); err != nil {
+				// The market channel expects a text PING at least every 10s
+				if err := c.conn.WriteMessage(websocket.TextMessage, []byte("PING")); err != nil {
 					c.errChan <- fmt.Errorf("ping failed: %w", err)
 				}
 			}

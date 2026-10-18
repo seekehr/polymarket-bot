@@ -19,8 +19,39 @@ cp config.example.yml config.yml
 ```
 
 Then open `config.yml` and set `markets.target_market_ids` to the markets you
-want to watch. These are the CLOB token IDs (the long numbers), not the IDs
-from the polymarket.com URL.
+want to trade. Each entry is either a polymarket.com link or a CLOB token ID:
+
+```yaml
+markets:
+  target_market_ids:
+    - "https://polymarket.com/sports/nfl/nfl-buf-lv-2026-10-18#Bills"
+    - "https://polymarket.com/event/xi-jinping-out-before-2027#Yes"
+    - "32338220190071351435772801779725302244575775216413325951443816017994629993401"
+```
+
+Links are turned into token IDs at startup, and the bot logs what each one
+resolved to. Every market has one token per outcome (Yes/No, or the two teams,
+Over/Under, ...), and their prices add up to about $1. The strategy trades
+each token you list on its own: it buys when the price drops below
+`buy_below` and sells above `sell_above`.
+
+- Add `#Outcome` to a link to trade one side, e.g. `#Bills` or `#Yes`. Without
+  it you get every outcome of the market. On a two-sided market that usually
+  means betting both ways at once, so pick one.
+- An event page with several markets (a game's spreads and totals, say)
+  resolves to the market that shares the page's slug, which for games is the
+  moneyline. For another one, open it on polymarket.com and use its own link
+  (`polymarket.com/event/<event>/<market>`). If the bot can't tell which
+  market you mean, it stops and lists some.
+- Closed markets, and anything Polymarket doesn't know, stop the bot at startup.
+
+To find token IDs yourself, take the slug from the market's URL and run:
+
+```bash
+curl "https://gamma-api.polymarket.com/events?slug=<slug>"
+```
+
+Each market in the response has `outcomes` and `clobTokenIds` in the same order.
 
 If you're going to trade for real, you also need API credentials. Put your
 wallet's private key (with or without `0x`) in `config.yml` under `api.private_key`, then run:
@@ -113,8 +144,6 @@ feed. If any of that fails it refuses to start. While running:
 
 Orders still resting when you stop the bot stay on the book and can fill.
 P&L figures exclude fees.
-
-`config.yml` is gitignored. Keep it that way.
 
 ## Config
 
