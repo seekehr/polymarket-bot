@@ -19,7 +19,6 @@ type Config struct {
 	WebSocket    WebSocketConfig    `yaml:"websocket"`
 	Performance  PerformanceConfig  `yaml:"performance"`
 	Monitoring   MonitoringConfig   `yaml:"monitoring"`
-	Backtesting  BacktestingConfig  `yaml:"backtesting"`
 	PaperTrading PaperTradingConfig `yaml:"paper_trading"`
 	Security     SecurityConfig     `yaml:"security"`
 	Deployment   DeploymentConfig   `yaml:"deployment"`
@@ -95,14 +94,6 @@ type MonitoringConfig struct {
 	MaxErrorRatePct  float64 `yaml:"max_error_rate_pct"`
 	LogLevel         string  `yaml:"log_level"`
 	LogFormat        string  `yaml:"log_format"`
-}
-
-type BacktestingConfig struct {
-	Enabled        bool    `yaml:"enabled"`
-	DataSource     string  `yaml:"data_source"`
-	StartDate      string  `yaml:"start_date"`
-	EndDate        string  `yaml:"end_date"`
-	InitialBalance float64 `yaml:"initial_balance"`
 }
 
 // PaperTradingConfig controls simulated trading. When enabled, no orders are

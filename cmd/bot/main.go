@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"runtime"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/seeker/polymarket-bot/internal/api"
 	"github.com/seeker/polymarket-bot/internal/config"
+	"github.com/seeker/polymarket-bot/internal/logging"
 	"github.com/seeker/polymarket-bot/internal/metrics"
 	"github.com/seeker/polymarket-bot/internal/order"
 	"github.com/seeker/polymarket-bot/internal/paper"
@@ -25,21 +25,30 @@ import (
 var (
 	configPath = flag.String("config", "config.yml", "Path to configuration file")
 	paperFlag  = flag.Bool("paper", false, "Force paper trading (simulated orders, no real money)")
+	colorFlag  = flag.String("color", "auto", "Colorize log output: auto, always or never")
 	version    = "1.0.0"
 )
 
 func main() {
 	flag.Parse()
 
+	colorMode, err := logging.ParseColorMode(*colorFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	logging.Configure(os.Stderr, colorMode)
+
 	// Print banner
 	printBanner()
 
 	// Load configuration
-	log.Printf("Loading configuration from %s...", *configPath)
+	logConfig.Infof("Loading configuration from %s...", *configPath)
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		logConfig.Fatalf("Failed to load config: %v", err)
 	}
+	logging.SetLevel(logging.ParseLevel(cfg.Monitoring.LogLevel))
 	if *paperFlag {
 		cfg.PaperTrading.Enabled = true
 		if cfg.PaperTrading.StartingBalance <= 0 {
@@ -51,7 +60,7 @@ func main() {
 	applyPerformanceTuning(cfg)
 
 	// Initialize components
-	log.Println("Initializing components...")
+	logSystem.Info("Initializing components...")
 
 	// Metrics collector
 	metricsCollector := metrics.NewCollector(cfg)
@@ -60,9 +69,9 @@ func main() {
 	apiClient := api.NewClient(cfg)
 
 	// Health check
-	log.Println("Checking API connectivity...")
+	logAPI.Info("Checking API connectivity...")
 	if err := apiClient.HealthCheck(); err != nil {
-		log.Printf("Warning: API health check failed: %v", err)
+		logAPI.Warnf("API health check failed: %v", err)
 	}
 
 	// Strategy engine
@@ -103,12 +112,12 @@ func main() {
 	if cfg.PaperTrading.Enabled {
 		paperTrader = paper.NewTrader(cfg.PaperTrading.StartingBalance)
 		submitFunc = paperSubmitFunc(paperTrader, strategyEngine, &orderManager, metricsCollector)
-		log.Println("==================================================")
-		log.Println(" PAPER TRADING MODE - no real orders will be sent")
-		log.Printf(" Virtual balance: $%.2f", cfg.PaperTrading.StartingBalance)
-		log.Println("==================================================")
+		logPaper.Info(logging.Rainbow("=================================================="))
+		logPaper.Info(logging.Rainbow("PAPER TRADING MODE - no real orders will be sent"))
+		logPaper.Info(logging.Rainbow(fmt.Sprintf("Virtual balance: $%.2f", cfg.PaperTrading.StartingBalance)))
+		logPaper.Info(logging.Rainbow("=================================================="))
 	} else {
-		log.Println("LIVE TRADING MODE - real orders will be sent with real funds")
+		logLive.Info("LIVE TRADING MODE - real orders will be sent with real funds")
 	}
 
 	orderManager = order.NewManager(cfg, submitFunc)
@@ -121,13 +130,13 @@ func main() {
 	defer cancel()
 
 	// Start components
-	log.Println("Starting bot...")
+	logSystem.Info("Starting bot...")
 
 	// Connect WebSocket
 	if err := wsClient.Connect(); err != nil {
-		log.Fatalf("Failed to connect WebSocket: %v", err)
+		logWS.Fatalf("Failed to connect WebSocket: %v", err)
 	}
-	log.Println("WebSocket connected")
+	logWS.Info("WebSocket connected")
 
 	// Start main event loop
 	go eventLoop(ctx, wsClient, strategyEngine, orderManager, metricsCollector, paperTrader)
@@ -144,13 +153,13 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	log.Printf("Bot running (strategy: %s, markets: %d)", cfg.Strategy.Mode, len(cfg.Markets.TargetMarketIDs))
-	log.Println("Press Ctrl+C to stop")
+	logSystem.Infof("Bot running (strategy: %s, markets: %d)", cfg.Strategy.Mode, len(cfg.Markets.TargetMarketIDs))
+	logSystem.Info("Press Ctrl+C to stop")
 
 	<-sigChan
 
 	// Graceful shutdown
-	log.Println("\nShutting down gracefully...")
+	logSystem.Info("\nShutting down gracefully...")
 	cancel()
 
 	// Close components
@@ -160,19 +169,19 @@ func main() {
 
 	// Print final stats
 	stats := metricsCollector.GetStats()
-	log.Println("\n=== Final Statistics ===")
-	log.Printf("Messages received: %d", stats.MessagesReceived)
-	log.Printf("Orders submitted: %d (success: %d, failed: %d)", stats.OrdersSubmitted, stats.OrdersSuccessful, stats.OrdersFailed)
-	log.Printf("Trades executed: %d", stats.TradesExecuted)
-	log.Printf("Total P&L: $%.2f", stats.TotalPnL)
-	log.Printf("Uptime: %s", stats.Uptime)
+	logStats.Info("\n=== Final Statistics ===")
+	logStats.Infof("Messages received: %d", stats.MessagesReceived)
+	logStats.Infof("Orders submitted: %d (success: %d, failed: %d)", stats.OrdersSubmitted, stats.OrdersSuccessful, stats.OrdersFailed)
+	logStats.Infof("Trades executed: %d", stats.TradesExecuted)
+	logStats.Infof("Total P&L: $%.2f", stats.TotalPnL)
+	logStats.Infof("Uptime: %s", stats.Uptime)
 
 	if paperTrader != nil {
-		log.Println("\n=== Paper Trading Results ===")
+		logPnL.Info("\n=== Paper Trading Results ===")
 		logPaperSummary(paperTrader)
 	}
 
-	log.Println("Shutdown complete")
+	logSystem.Info("Shutdown complete")
 }
 
 // eventLoop is the main event processing loop
@@ -195,7 +204,7 @@ func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *
 			startTime := time.Now()
 			signal, err := strategyEngine.ProcessMarketData(marketData)
 			if err != nil {
-				log.Printf("Strategy error: %v", err)
+				logStrat.Errorf("Strategy error: %v", err)
 				metricsCollector.RecordError()
 				continue
 			}
@@ -227,13 +236,13 @@ func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *
 
 			// Submit order
 			if err := orderManager.SubmitOrder(orderReq); err != nil {
-				log.Printf("Order submission failed: %v", err)
+				logOrder.Errorf("Order submission failed: %v", err)
 				continue
 			}
 
 			// Log signal
 			totalLatency := time.Since(startTime)
-			log.Printf("[%s] %s %d @ %.4f - %s (latency: %dms)",
+			logSignal.Infof("[%s] %s %d @ %.4f - %s (latency: %dms)",
 				signal.MarketID[:8],
 				signal.Action,
 				signal.Quantity,
@@ -242,7 +251,7 @@ func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *
 				totalLatency.Milliseconds())
 
 		case err := <-wsClient.Errors():
-			log.Printf("WebSocket error: %v", err)
+			logWS.Errorf("WebSocket error: %v", err)
 			metricsCollector.RecordError()
 		}
 	}
@@ -257,7 +266,7 @@ func paperSubmitFunc(trader *paper.Trader, strategyEngine *strategy.Engine, orde
 		for i, req := range requests {
 			fill, err := trader.Execute(req)
 			if err != nil {
-				log.Printf("[PAPER] Order rejected: %v", err)
+				logOrder.Errorf("Paper order rejected: %v", err)
 				metricsCollector.RecordOrder(false)
 				responses[i] = &types.OrderResponse{Success: false, Error: err.Error()}
 				continue
@@ -270,7 +279,7 @@ func paperSubmitFunc(trader *paper.Trader, strategyEngine *strategy.Engine, orde
 			metricsCollector.RecordOrder(true)
 			metricsCollector.RecordTrade(fill.Trade.RealizedPnL)
 
-			log.Printf("[PAPER] Filled %s %d @ %.4f in %s (realized P&L: $%.2f)",
+			logFill.Infof("Paper %s %d @ %.4f in %s (realized P&L: $%.2f)",
 				req.Side, req.Quantity, req.Price, req.MarketID, fill.Trade.RealizedPnL)
 
 			responses[i] = &types.OrderResponse{
@@ -305,10 +314,10 @@ func paperReportLoop(ctx context.Context, trader *paper.Trader, intervalSec int)
 // logPaperSummary prints the current paper portfolio
 func logPaperSummary(trader *paper.Trader) {
 	s := trader.Summary()
-	log.Printf("[PAPER] Equity: $%.2f (%+.2f%%) | Cash: $%.2f | Realized: $%.2f | Unrealized: $%.2f | Trades: %d",
+	logPnL.Infof("Equity: $%.2f (%+.2f%%) | Cash: $%.2f | Realized: $%.2f | Unrealized: $%.2f | Trades: %d",
 		s.Equity, s.TotalReturnPct, s.Cash, s.RealizedPnL, s.UnrealizedPnL, s.Trades)
 	for _, p := range s.Positions {
-		log.Printf("[PAPER]   %s %s %d @ %.4f (mark %.4f, P&L $%.2f)",
+		logPnL.Infof("  %s %s %d @ %.4f (mark %.4f, P&L $%.2f)",
 			p.MarketID, p.Side, p.Quantity, p.AvgPrice, p.MarkPrice, p.UnrealizedPnL)
 	}
 }
@@ -327,21 +336,19 @@ func monitoringLoop(ctx context.Context, metricsCollector *metrics.Collector, cf
 			// Check thresholds
 			alerts := metricsCollector.CheckThresholds()
 			for _, alert := range alerts {
-				log.Printf("ALERT: %s", alert)
+				logAlert.Warnf("%s", alert)
 			}
 
 			// Print stats
 			stats := metricsCollector.GetStats()
-			if cfg.Monitoring.LogLevel == "debug" {
-				log.Printf("Stats: msgs=%d orders=%d/%d trades=%d pnl=$%.2f lat=%dms err=%.2f%%",
-					stats.MessagesReceived,
-					stats.OrdersSuccessful,
-					stats.OrdersSubmitted,
-					stats.TradesExecuted,
-					stats.DailyPnL,
-					stats.AvgLatency.Milliseconds(),
-					stats.ErrorRate)
-			}
+			logStats.Debugf("msgs=%d orders=%d/%d trades=%d pnl=$%.2f lat=%dms err=%.2f%%",
+				stats.MessagesReceived,
+				stats.OrdersSuccessful,
+				stats.OrdersSubmitted,
+				stats.TradesExecuted,
+				stats.DailyPnL,
+				stats.AvgLatency.Milliseconds(),
+				stats.ErrorRate)
 		}
 	}
 }
@@ -351,18 +358,18 @@ func applyPerformanceTuning(cfg *config.Config) {
 	// Set GOGC if specified
 	if cfg.Performance.GCPercent > 0 {
 		debug.SetGCPercent(cfg.Performance.GCPercent)
-		log.Printf("Set GOGC=%d", cfg.Performance.GCPercent)
+		logSystem.Infof("Set GOGC=%d", cfg.Performance.GCPercent)
 	}
 
 	// Set GOMAXPROCS
 	if cfg.Performance.WorkerCount > 0 {
 		runtime.GOMAXPROCS(cfg.Performance.WorkerCount)
-		log.Printf("Set GOMAXPROCS=%d", cfg.Performance.WorkerCount)
+		logSystem.Infof("Set GOMAXPROCS=%d", cfg.Performance.WorkerCount)
 	}
 
 	// CPU affinity would require OS-specific code (not implemented in pure Go)
 	if len(cfg.Performance.CPUCores) > 0 {
-		log.Printf("Note: CPU core pinning requires OS-specific implementation")
+		logSystem.Infof("Note: CPU core pinning requires OS-specific implementation")
 	}
 }
 

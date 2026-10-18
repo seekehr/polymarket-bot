@@ -47,6 +47,10 @@ and prints a summary.
 
 Pass `-paper` to force paper mode no matter what the config says.
 
+Log levels are colored when logging to a terminal. Use `-color=always` or
+`-color=never` to override, or set `NO_COLOR=1` to turn colors off.
+`monitoring.log_level` in the config sets the minimum level shown.
+
 ## Paper trading
 
 ```yaml

@@ -2,25 +2,27 @@ package metrics
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/seeker/polymarket-bot/internal/config"
+	"github.com/seeker/polymarket-bot/internal/logging"
 )
+
+var logMetrics = logging.NewTopic("METRICS", logging.Blue)
 
 // Collector tracks bot performance metrics
 type Collector struct {
 	cfg *config.MonitoringConfig
 
 	// Counters
-	messagesReceived   atomic.Uint64
-	ordersSubmitted    atomic.Uint64
-	ordersSuccessful   atomic.Uint64
-	ordersFailed       atomic.Uint64
-	tradesExecuted     atomic.Uint64
+	messagesReceived atomic.Uint64
+	ordersSubmitted  atomic.Uint64
+	ordersSuccessful atomic.Uint64
+	ordersFailed     atomic.Uint64
+	tradesExecuted   atomic.Uint64
 
 	// Latency tracking
 	latencyMu        sync.RWMutex
@@ -29,14 +31,14 @@ type Collector struct {
 	avgLatency       time.Duration
 
 	// Error tracking
-	errorsMu       sync.RWMutex
-	errorCount     uint64
+	errorsMu        sync.RWMutex
+	errorCount      uint64
 	totalOperations uint64
 
 	// P&L tracking
-	pnlMu      sync.RWMutex
-	totalPnL   float64
-	dailyPnL   float64
+	pnlMu    sync.RWMutex
+	totalPnL float64
+	dailyPnL float64
 
 	// Start time
 	startTime time.Time
@@ -269,10 +271,10 @@ func (c *Collector) startMetricsServer(port int) {
 	})
 
 	addr := fmt.Sprintf(":%d", port)
-	log.Printf("Starting metrics server on %s", addr)
+	logMetrics.Infof("Starting metrics server on %s", addr)
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Printf("Metrics server error: %v", err)
+		logMetrics.Errorf("Metrics server error: %v", err)
 	}
 }
 

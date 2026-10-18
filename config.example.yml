@@ -142,14 +142,6 @@ paper_trading:
   starting_balance: 1000     # Virtual USDC
   report_interval_sec: 60    # How often to log the paper portfolio
 
-# Backtesting (optional)
-backtesting:
-  enabled: false
-  data_source: "subgraph"    # "subgraph", "data_api", or "file"
-  start_date: "2024-01-01"
-  end_date: "2024-12-31"
-  initial_balance: 10000
-
 # Key Management
 security:
   # Use vault for key storage
