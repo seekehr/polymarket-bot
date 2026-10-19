@@ -8,6 +8,9 @@ your phone and check on or pause trading from there.
 By default it runs in paper mode: real prices, fake money, no orders sent. Use
 that until you trust it.
 
+<img src="preview.png" width="350">
+<img src="bot-preview.png" width="350">
+
 ## Setup
 
 You need Go 1.25+. Python 3 is only needed if you want the credentials script.
@@ -89,7 +92,7 @@ The script rewrites `config.yml` with PyYAML, so comments in it are dropped.
 go run ./cmd/bot -config config.yml
 ```
 
-Or build it first with `go build -o polymarket-bot ./cmd/bot`. Ctrl+C stops it
+Or build it first with `go build -o polymarket-bot ./cmd/bot` so you don't gotta deal with the firewall prompts. Ctrl+C stops it
 and prints a summary.
 
 Pass `-paper` to force paper mode no matter what the config says.
@@ -117,7 +120,7 @@ fills are modelled, so real results will be worse than what you see here.
 
 ## Live trading
 
-Only do this with money you can afford to lose.
+Only do this with money you can afford to lose. I am NOT to be blamed for any losses, especially with untweaked config settings.
 
 1. Set up your private key and API credentials (see Setup above). You can also
    use `${ENV_VAR}` syntax in `config.yml` to keep the key out of the file.
@@ -132,10 +135,6 @@ On startup the bot checks every target market is tradable, loads your real
 positions and resting orders from Polymarket, and connects to your account
 feed. If any of that fails it refuses to start. While running:
 
-- Orders are signed locally (EIP-712, Polymarket CLOB V2) and posted to the CLOB.
-- Fills and order updates arrive over the account websocket and update the
-  positions the strategy and risk limits see. After a reconnect, missed fills
-  are fetched over REST.
 - Every fill is appended to `data/live_trades.jsonl`, with a new line each
   time its settlement status changes. Today's realized losses are read back
   from it on restart, so `max_daily_loss` survives restarts.
@@ -172,10 +171,3 @@ The main things to tune:
 - `orders`: rate limits, batching, retries
 
 Prometheus metrics are served on `monitoring.metrics_port` (9090 by default).
-
-## Known issues
-
-- In live mode, filled orders don't update the strategy's position tracking, so
-  the bot never sees that it's holding anything and won't exit trades. Paper
-  mode doesn't have this problem.
-- Tests only cover the paper trader so far (`go test ./...`).
