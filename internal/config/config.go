@@ -21,6 +21,7 @@ type Config struct {
 	Monitoring   MonitoringConfig   `yaml:"monitoring"`
 	PaperTrading PaperTradingConfig `yaml:"paper_trading"`
 	LiveTrading  LiveTradingConfig  `yaml:"live_trading"`
+	Telegram     TelegramConfig     `yaml:"telegram"`
 	Security     SecurityConfig     `yaml:"security"`
 	Deployment   DeploymentConfig   `yaml:"deployment"`
 }
@@ -129,11 +130,26 @@ func (c *Config) applyDefaults() {
 	if c.PaperTrading.StateFile == "" {
 		c.PaperTrading.StateFile = "data/paper_state.json"
 	}
+	if c.Telegram.AlertCooldownSec == 0 {
+		c.Telegram.AlertCooldownSec = 600
+	}
 }
 
 // LiveTradingConfig controls real-money trading state kept on disk.
 type LiveTradingConfig struct {
 	JournalFile string `yaml:"journal_file"` // append-only log of live fills
+}
+
+// TelegramConfig controls the optional Telegram bot for notifications and
+// remote commands.
+type TelegramConfig struct {
+	Enabled          bool    `yaml:"enabled"`
+	BotToken         string  `yaml:"bot_token"`          // from @BotFather
+	ChatIDs          []int64 `yaml:"chat_ids"`           // only these chats can use it
+	NotifyFills      bool    `yaml:"notify_fills"`       // message on every fill
+	NotifyAlerts     bool    `yaml:"notify_alerts"`      // message on alerts and order failures
+	AlertCooldownSec int     `yaml:"alert_cooldown_sec"` // min gap between repeats of one alert
+	Proxy            string  `yaml:"proxy"`              // socks5:// or http:// proxy for Telegram only
 }
 
 // ValidateLive checks the settings live trading needs. It is separate from
@@ -243,6 +259,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Performance.WorkerCount <= 0 {
 		return fmt.Errorf("performance.worker_count must be positive")
+	}
+	if t := &c.Telegram; t.Enabled {
+		if t.BotToken == "" || strings.HasPrefix(t.BotToken, "${") {
+			return fmt.Errorf("telegram.bot_token is required when telegram is enabled (is the environment variable set?)")
+		}
+		if t.AlertCooldownSec < 0 {
+			return fmt.Errorf("telegram.alert_cooldown_sec cannot be negative")
+		}
 	}
 
 	return nil

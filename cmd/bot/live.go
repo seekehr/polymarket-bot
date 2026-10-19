@@ -29,6 +29,7 @@ type liveTrading struct {
 	strategy *strategy.Engine
 	metrics  *metrics.Collector
 	orders   *order.Manager // set by attach
+	tg       *telegramBridge
 	targets  []string
 	syncMu   sync.Mutex
 	synced   map[string]bool // target markets the strategy currently holds
@@ -38,7 +39,7 @@ type liveTrading struct {
 // startLive checks credentials, loads the account's real positions and open
 // orders, and connects the user feed. Any failure is fatal: trading without
 // knowing what we already hold isn't safe.
-func startLive(ctx context.Context, cfg *config.Config, client *api.Client, strategyEngine *strategy.Engine, mc *metrics.Collector) *liveTrading {
+func startLive(ctx context.Context, cfg *config.Config, client *api.Client, strategyEngine *strategy.Engine, mc *metrics.Collector, tg *telegramBridge) *liveTrading {
 	if err := cfg.ValidateLive(); err != nil {
 		logConfig.Fatalf("%v", err)
 	}
@@ -59,6 +60,7 @@ func startLive(ctx context.Context, cfg *config.Config, client *api.Client, stra
 		feed:     websocket.NewUserClient(cfg.API.UserWebSocketURL, cfg.API.APIKey, cfg.API.APISecret, cfg.API.Passphrase),
 		strategy: strategyEngine,
 		metrics:  mc,
+		tg:       tg,
 		targets:  cfg.Markets.TargetMarketIDs,
 		synced:   make(map[string]bool),
 		started:  time.Now(),
@@ -203,8 +205,10 @@ func (l *liveTrading) applyTrade(t *api.Trade) {
 		switch {
 		case f.Status == "FAILED":
 			logFill.Errorf("%s in %s failed to settle; position reverted", f, short(f.AssetID))
+			l.tg.liveFillFailed(f)
 		case u.New:
 			logFill.Infof("%s in %s (realized P&L $%.2f)", f, short(f.AssetID), f.RealizedPnL)
+			l.tg.liveFill(f)
 			l.metrics.RecordTrade(f.RealizedPnL)
 			l.orders.RecordTrade(&types.Trade{ID: f.TradeID, OrderID: f.OrderID, MarketID: f.AssetID, RealizedPnL: f.RealizedPnL})
 		default:

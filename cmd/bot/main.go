@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -96,16 +97,20 @@ func main() {
 	cfg.Markets.TargetMarketIDs = targets
 	checkMarkets(apiClient, targets, labels)
 
+	// Set from Telegram's /pause and /resume; stops new orders, not the feed
+	var paused atomic.Bool
+	tg := newTelegramBridge(cfg, labels, metricsCollector, &paused)
+
 	if cfg.PaperTrading.Enabled {
 		paperTrader = loadPaperTrader(statePath, cfg.PaperTrading.StartingBalance, *paperResetFlag)
-		submitFunc = paperSubmitFunc(paperTrader, strategyEngine, &orderManager, metricsCollector)
+		submitFunc = paperSubmitFunc(paperTrader, strategyEngine, &orderManager, metricsCollector, tg)
 		logPaper.Info(logging.Rainbow("=================================================="))
 		logPaper.Info(logging.Rainbow("PAPER TRADING MODE - no real orders will be sent"))
 		logPaper.Info(logging.Rainbow(fmt.Sprintf("Virtual equity: $%.2f", paperTrader.Summary().Equity)))
 		logPaper.Info(logging.Rainbow("=================================================="))
 	} else {
 		logLive.Info("LIVE TRADING MODE - real orders will be sent with real funds")
-		liveT = startLive(ctx, cfg, apiClient, strategyEngine, metricsCollector)
+		liveT = startLive(ctx, cfg, apiClient, strategyEngine, metricsCollector, tg)
 		submitFunc = liveT.submitFunc()
 	}
 
@@ -116,6 +121,7 @@ func main() {
 	if liveT != nil {
 		liveT.attach(ctx, orderManager)
 	}
+	tg.attach(paperTrader, liveT, orderManager)
 
 	// WebSocket client
 	wsClient := websocket.NewClient(cfg)
@@ -130,7 +136,7 @@ func main() {
 	logWS.Info("WebSocket connected")
 
 	// Start main event loop
-	go eventLoop(ctx, wsClient, strategyEngine, orderManager, metricsCollector, paperTrader)
+	go eventLoop(ctx, wsClient, strategyEngine, orderManager, metricsCollector, paperTrader, &paused, tg)
 
 	// Periodically report and save the paper portfolio
 	saverDone := make(chan struct{})
@@ -142,7 +148,9 @@ func main() {
 	}
 
 	// Start monitoring loop
-	go monitoringLoop(ctx, metricsCollector, cfg)
+	go monitoringLoop(ctx, metricsCollector, cfg, tg)
+
+	tg.start(ctx)
 
 	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)
@@ -188,11 +196,13 @@ func main() {
 		liveT.close()
 	}
 
+	tg.stop()
+
 	logSystem.Info("Shutdown complete")
 }
 
 // eventLoop is the main event processing loop
-func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *strategy.Engine, orderManager *order.Manager, metricsCollector *metrics.Collector, paperTrader *paper.Trader) {
+func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *strategy.Engine, orderManager *order.Manager, metricsCollector *metrics.Collector, paperTrader *paper.Trader, paused *atomic.Bool, tg *telegramBridge) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -216,8 +226,12 @@ func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *
 				continue
 			}
 
-			// If no signal, continue
+			// If no signal, or paused from Telegram, continue
 			if signal == nil {
+				continue
+			}
+			if paused.Load() {
+				logSignal.Debugf("[%s] %s ignored: trading is paused", signal.MarketID[:8], signal.Action)
 				continue
 			}
 
@@ -245,6 +259,7 @@ func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *
 			if err := orderManager.SubmitOrder(orderReq); err != nil {
 				if !errors.Is(err, order.ErrSkipped) {
 					logOrder.Errorf("Order submission failed: %v", err)
+					tg.alert(alertKey("order", err.Error()), "Order failed: "+err.Error())
 				}
 				continue
 			}
@@ -262,13 +277,14 @@ func eventLoop(ctx context.Context, wsClient *websocket.Client, strategyEngine *
 		case err := <-wsClient.Errors():
 			logWS.Errorf("WebSocket error: %v", err)
 			metricsCollector.RecordError()
+			tg.alert("ws", fmt.Sprintf("WebSocket error: %v", err))
 		}
 	}
 }
 
 // paperSubmitFunc returns a submit function that simulates fills instead of calling the API.
 // orderManager is a pointer because the manager is created after its submit function.
-func paperSubmitFunc(trader *paper.Trader, strategyEngine *strategy.Engine, orderManager **order.Manager, metricsCollector *metrics.Collector) order.SubmitFunc {
+func paperSubmitFunc(trader *paper.Trader, strategyEngine *strategy.Engine, orderManager **order.Manager, metricsCollector *metrics.Collector, tg *telegramBridge) order.SubmitFunc {
 	return func(requests []*types.OrderRequest) ([]*types.OrderResponse, error) {
 		responses := make([]*types.OrderResponse, len(requests))
 
@@ -290,6 +306,7 @@ func paperSubmitFunc(trader *paper.Trader, strategyEngine *strategy.Engine, orde
 
 			logFill.Infof("Paper %s %d @ %.4f in %s (realized P&L: $%.2f)",
 				req.Side, req.Quantity, req.Price, req.MarketID, fill.Trade.RealizedPnL)
+			tg.paperFill(req.Side, req.Quantity, req.Price, req.MarketID, fill.Trade.RealizedPnL)
 
 			responses[i] = &types.OrderResponse{
 				Success: true,
@@ -332,7 +349,7 @@ func logPaperSummary(trader *paper.Trader) {
 }
 
 // monitoringLoop periodically checks metrics and alerts
-func monitoringLoop(ctx context.Context, metricsCollector *metrics.Collector, cfg *config.Config) {
+func monitoringLoop(ctx context.Context, metricsCollector *metrics.Collector, cfg *config.Config, tg *telegramBridge) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
@@ -346,6 +363,7 @@ func monitoringLoop(ctx context.Context, metricsCollector *metrics.Collector, cf
 			alerts := metricsCollector.CheckThresholds()
 			for _, alert := range alerts {
 				logAlert.Warnf("%s", alert)
+				tg.alert(alertKey("metric", alert), alert)
 			}
 
 			// Print stats

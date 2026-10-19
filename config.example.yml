@@ -42,7 +42,7 @@ markets:
   # List of market IDs to subscribe to
   target_market_ids:
     # polymarket.com market links (add #Outcome to trade one side), or CLOB token IDs
-    - "https://polymarket.com/event/xi-jinping-out-before-2027#Yes"  # Example only: use your own market
+    - "https://polymarket.com/event/xi-jinping-out-before-2027"  # Example only: use your own market
 
   # Minimum liquidity required (in USD) to consider a market
   min_liquidity: 10000
@@ -141,9 +141,9 @@ monitoring:
   # Latency tracking
   track_latency: true
 
-  # Auto-halt conditions
-  max_latency_ms: 100        # Halt if latency exceeds this
-  max_error_rate_pct: 5.0    # Halt if error rate exceeds this (%)
+  # Alert thresholds (checked every 10s; log a warning only, never halt)
+  max_latency_ms: 100        # Warn if average latency exceeds this
+  max_error_rate_pct: 5.0    # Warn if error rate exceeds this (%)
 
   # Logging
   log_level: "info"          # debug, info, warn, error
@@ -163,6 +163,20 @@ paper_trading:
 # Live Trading (used when paper_trading.enabled is false)
 live_trading:
   journal_file: "data/live_trades.jsonl"  # Every live fill, appended as it happens
+
+# Telegram bot (optional): notifications and remote control from your phone.
+# Create a bot with @BotFather, set TELEGRAM_BOT_TOKEN, enable this, then send
+# /start to your bot to get your chat ID. Commands are listed in the README.
+telegram:
+  enabled: false
+  bot_token: "${TELEGRAM_BOT_TOKEN}"  # From @BotFather; keep it secret
+  chat_ids: []               # Your chat ID(s), e.g. [123456789]; nobody else can use the bot.
+                             # Leave empty at first: the bot replies to /start with your ID
+  notify_fills: true         # Message on every fill
+  notify_alerts: true        # Message on latency/error alerts and failed orders
+  alert_cooldown_sec: 600    # Repeats of the same alert are sent at most this often
+  proxy: ""                  # Only if Telegram is blocked on your network, e.g. "socks5://127.0.0.1:1080"
+                             # or "http://user:pass@host:8080". Only Telegram traffic uses it.
 
 # Key Management
 security:

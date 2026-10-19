@@ -18,4 +18,5 @@ var (
 	logAlert  = logging.NewTopic("ALERT", logging.Yellow)   // metric threshold alerts
 	logStats  = logging.NewTopic("STATS", logging.Blue)     // runtime and final statistics
 	logState  = logging.NewTopic("STATE", logging.Green)    // saving and restoring the paper portfolio
+	logTG     = logging.NewTopic("TELEGRAM", logging.Cyan)  // Telegram notifications and commands
 )

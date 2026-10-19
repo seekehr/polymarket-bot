@@ -2,7 +2,8 @@
 
 A trading bot for Polymarket, written in Go. It listens to the CLOB websocket for
 the markets you pick, runs a simple strategy on each price update, and places
-orders through the REST API.
+orders through the REST API. A Telegram bot lets you get fills and alerts on
+your phone and check on or pause trading from there.
 
 By default it runs in paper mode: real prices, fake money, no orders sent. Use
 that until you trust it.
@@ -144,6 +145,20 @@ feed. If any of that fails it refuses to start. While running:
 
 Orders still resting when you stop the bot stay on the book and can fill.
 P&L figures exclude fees.
+
+## Telegram
+
+The bot can be controlled from Telegram (set it up under `telegram` in
+`config.example.yml`). It messages you on startup, shutdown, fills and alerts.
+
+| Command | What it does |
+| --- | --- |
+| `/status` | Mode, uptime, strategy, feed and order stats, daily loss |
+| `/pnl` | Equity, realized and unrealized P&L, open positions |
+| `/orders` | Live orders still working on Polymarket |
+| `/pause` | Stop placing new orders (orders already on the book stay there) |
+| `/resume` | Start placing orders again |
+| `/help` | List commands |
 
 ## Config
 
