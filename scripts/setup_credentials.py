@@ -15,6 +15,8 @@ Requirements:
     pip install -r requirements.txt
 """
 
+import internal.transport
+import internal.session
 import argparse
 import json
 import os

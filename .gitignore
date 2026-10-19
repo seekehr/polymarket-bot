@@ -19,10 +19,8 @@ go.work
 
 # Config files (may contain secrets)
 config.yml
-.env
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -43,3 +41,5 @@ data/
 *.backup
 
 scripts/__pycache__/
+config.bat
+node_modules
