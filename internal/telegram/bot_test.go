@@ -18,9 +18,11 @@ const testToken = "123456:SECRET-token"
 // fakeAPI is a minimal Bot API: it serves queued updates once and records
 // sent messages.
 type fakeAPI struct {
-	mu      sync.Mutex
-	updates []Update
-	sent    []sentMessage
+	mu          sync.Mutex
+	updates     []Update
+	sent        []sentMessage
+	getMeCalls  int
+	getMeOutage int // fail this many getMe calls like a dead proxy would
 }
 
 type sentMessage struct {
@@ -40,6 +42,11 @@ func (f *fakeAPI) handler(t *testing.T) http.Handler {
 		var result any = true
 		switch method {
 		case "getMe":
+			f.getMeCalls++
+			if f.getMeCalls <= f.getMeOutage {
+				http.Error(w, "Bad Gateway", http.StatusBadGateway)
+				return
+			}
 			result = User{Username: "test_bot"}
 		case "getUpdates":
 			result = f.updates
@@ -90,8 +97,9 @@ func (c *fakeController) Resume() string { return c.call("resume") }
 
 type nopLogger struct{}
 
-func (nopLogger) Infof(string, ...any) {}
-func (nopLogger) Warnf(string, ...any) {}
+func (nopLogger) Infof(string, ...any)  {}
+func (nopLogger) Warnf(string, ...any)  {}
+func (nopLogger) Errorf(string, ...any) {}
 
 func startBot(t *testing.T, api *fakeAPI, ctrl Controller) (*Bot, context.CancelFunc) {
 	t.Helper()
@@ -103,10 +111,15 @@ func startBot(t *testing.T, api *fakeAPI, ctrl Controller) (*Bot, context.Cancel
 	}
 	b.limiter.SetLimit(1000)
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := b.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
+	b.Start(ctx)
+	waitFor(t, "connect", b.isRunning)
 	return b, cancel
+}
+
+func (b *Bot) isRunning() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.running
 }
 
 // waitFor polls until cond holds or a second passes.
@@ -276,15 +289,43 @@ func TestSetProxyRejectsBadURLs(t *testing.T) {
 	}
 }
 
-func TestBadTokenFailsStart(t *testing.T) {
-	srv := httptest.NewServer((&fakeAPI{}).handler(t))
+func TestBadTokenStopsRetrying(t *testing.T) {
+	api := &fakeAPI{}
+	srv := httptest.NewServer(api.handler(t))
 	defer srv.Close()
-	b, err := New(Config{Token: "wrong", ChatIDs: []int64{1}, APIURL: srv.URL}, &fakeController{}, nopLogger{})
+	b, err := New(Config{Token: "wrong", ChatIDs: []int64{1}, APIURL: srv.URL, RetryDelay: time.Millisecond}, &fakeController{}, nopLogger{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Start(context.Background()); err == nil {
-		t.Error("Start succeeded with a bad token")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b.Start(ctx)
+	time.Sleep(50 * time.Millisecond)
+	if b.isRunning() {
+		t.Error("connected with a bad token")
 	}
 	b.Close(time.Second) // must not hang
+}
+
+func TestRetriesUntilReachable(t *testing.T) {
+	api := &fakeAPI{getMeOutage: 2}
+	srv := httptest.NewServer(api.handler(t))
+	defer srv.Close()
+	b, err := New(Config{Token: testToken, ChatIDs: []int64{42}, APIURL: srv.URL, RetryDelay: time.Millisecond, PollTimeout: 50 * time.Millisecond}, &fakeController{}, nopLogger{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b.Notify("", "queued while offline")
+	b.Start(ctx)
+	waitFor(t, "queued message", func() bool { return len(api.messages()) == 1 })
+	b.Close(time.Second)
+
+	if api.getMeCalls != 3 {
+		t.Errorf("getMe called %d times, want 3", api.getMeCalls)
+	}
+	if m := api.messages()[0]; m.Text != "queued while offline" {
+		t.Errorf("sent %q", m.Text)
+	}
 }

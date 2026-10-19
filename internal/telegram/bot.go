@@ -14,8 +14,12 @@ import (
 // defaultPollTimeout is how long one getUpdates call waits for new messages.
 const defaultPollTimeout = 30 * time.Second
 
-// retryDelay is the pause after a failed poll before trying again.
-var retryDelay = 5 * time.Second
+// defaultRetryDelay is the first pause after a failed connect or poll.
+// Connect retries back off from there up to maxRetryDelay.
+const (
+	defaultRetryDelay = 15 * time.Second
+	maxRetryDelay     = 2 * time.Minute
+)
 
 // Controller is what the bot's commands read and change. The trading bot
 // implements it; each method returns the reply text.
@@ -31,6 +35,7 @@ type Controller interface {
 type Logger interface {
 	Infof(format string, args ...any)
 	Warnf(format string, args ...any)
+	Errorf(format string, args ...any)
 }
 
 // Config configures a Bot.
@@ -41,6 +46,7 @@ type Config struct {
 	APIURL        string        // defaults to DefaultAPIURL
 	PollTimeout   time.Duration // defaults to 30s; tests shorten it
 	Proxy         string        // optional socks5:// or http:// proxy for Telegram traffic only
+	RetryDelay    time.Duration // first pause after a failed request; defaults to 15s
 }
 
 var commands = []BotCommand{
@@ -69,11 +75,14 @@ type Bot struct {
 	log      Logger
 	cooldown time.Duration
 	poll     time.Duration
+	retry    time.Duration
+	proxied  bool
 	limiter  *rate.Limiter
 	started  time.Time
 
 	mu       sync.Mutex
 	closed   bool
+	running  bool // sendLoop started
 	lastSent map[string]time.Time
 
 	queue      chan outgoing
@@ -92,6 +101,9 @@ func New(cfg Config, ctrl Controller, log Logger) (*Bot, error) {
 	}
 	if cfg.PollTimeout <= 0 || cfg.PollTimeout > defaultPollTimeout {
 		cfg.PollTimeout = defaultPollTimeout
+	}
+	if cfg.RetryDelay <= 0 {
+		cfg.RetryDelay = defaultRetryDelay
 	}
 	allowed := make(map[int64]bool, len(cfg.ChatIDs))
 	for _, id := range cfg.ChatIDs {
@@ -112,6 +124,8 @@ func New(cfg Config, ctrl Controller, log Logger) (*Bot, error) {
 		log:      log,
 		cooldown: cfg.AlertCooldown,
 		poll:     cfg.PollTimeout,
+		retry:    cfg.RetryDelay,
+		proxied:  cfg.Proxy != "",
 		// Telegram allows about one message a second per chat; allow short bursts.
 		limiter:    rate.NewLimiter(1, 5),
 		lastSent:   make(map[string]time.Time),
@@ -122,31 +136,72 @@ func New(cfg Config, ctrl Controller, log Logger) (*Bot, error) {
 	}, nil
 }
 
-// Start checks the token, registers the command menu and starts answering
-// commands until ctx ends. Commands sent while the bot was offline are ignored.
-func (b *Bot) Start(ctx context.Context) error {
-	name, err := b.client.GetMe(ctx)
-	if err != nil {
-		b.stopSend()
-		close(b.senderDone)
-		var apiErr *APIError
-		if errors.As(err, &apiErr) {
-			return fmt.Errorf("telegram rejected the bot token (check bot_token): %w", err)
-		}
-		return fmt.Errorf("can't reach Telegram (if it's blocked on your network, set telegram.proxy): %w", err)
+// Start connects in the background and then answers commands until ctx
+// ends. Telegram being unreachable (a blocked network or a flaky proxy) is
+// retried with backoff; a rejected token is not. Notifications sent before
+// the connection is up are queued. Commands sent while the bot was offline
+// are ignored.
+func (b *Bot) Start(ctx context.Context) {
+	go b.run(ctx)
+}
+
+func (b *Bot) run(ctx context.Context) {
+	name, ok := b.connect(ctx)
+	if !ok {
+		return
 	}
 	if err := b.client.SetMyCommands(ctx, commands); err != nil {
 		b.log.Warnf("Couldn't register the command menu: %v", err)
 	}
 	b.started = time.Now()
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return
+	}
+	b.running = true
+	go b.sendLoop()
+	b.mu.Unlock()
+
 	if len(b.chats) == 0 {
 		b.log.Warnf("Connected as @%s, but telegram.chat_ids is empty: send /start to @%s to get your chat ID", name, name)
 	} else {
 		b.log.Infof("Connected as @%s, sending to %d chat(s)", name, len(b.chats))
 	}
-	go b.sendLoop()
-	go b.pollLoop(ctx)
-	return nil
+	b.pollLoop(ctx)
+}
+
+// connect calls getMe until it works, returning the bot's username. It
+// gives up when ctx ends or Telegram rejects the token.
+func (b *Bot) connect(ctx context.Context) (string, bool) {
+	delay := b.retry
+	for attempt := 1; ; attempt++ {
+		name, err := b.client.GetMe(ctx)
+		if err == nil {
+			return name, true
+		}
+		if ctx.Err() != nil {
+			return "", false
+		}
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.RetryAfter == 0 {
+			b.log.Errorf("Telegram rejected the bot token (check bot_token): %v; continuing without Telegram", err)
+			return "", false
+		}
+		if attempt == 1 { // log once, not on every retry
+			hint := "if it's blocked on your network, set telegram.proxy"
+			if b.proxied {
+				hint = "is the proxy up?"
+			}
+			b.log.Warnf("Can't reach Telegram (%s): %v; retrying in the background", hint, err)
+		}
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return "", false
+		}
+		delay = min(delay*2, maxRetryDelay)
+	}
 }
 
 // Notify sends text to every configured chat without blocking. Messages
@@ -207,8 +262,13 @@ func (b *Bot) Close(timeout time.Duration) {
 	}
 	b.closed = true
 	close(b.queue)
+	running := b.running
 	b.mu.Unlock()
 
+	if !running { // never connected: nothing will be sent
+		b.stopSend()
+		return
+	}
 	select {
 	case <-b.senderDone:
 	case <-time.After(timeout):
@@ -264,11 +324,11 @@ func (b *Bot) pollLoop(ctx context.Context) {
 				return
 			}
 			if !failing { // log once per outage, not every retry
-				b.log.Warnf("Polling failed, retrying every %s: %v", retryDelay, err)
+				b.log.Warnf("Polling failed, retrying every %s: %v", b.retry, err)
 				failing = true
 			}
 			select {
-			case <-time.After(retryDelay):
+			case <-time.After(b.retry):
 				continue
 			case <-ctx.Done():
 				return

@@ -22,7 +22,7 @@ import (
 // A nil *telegramBridge does nothing, so call sites don't check whether
 // Telegram is enabled.
 type telegramBridge struct {
-	bot     *telegram.Bot // nil until start succeeds
+	bot     *telegram.Bot
 	cfg     *config.Config
 	labels  map[string]string // token ID -> "Question / Outcome"
 	metrics *metrics.Collector
@@ -34,12 +34,26 @@ type telegramBridge struct {
 	orders *order.Manager
 }
 
-// newTelegramBridge returns nil when Telegram is disabled.
+// newTelegramBridge returns nil when Telegram is disabled or misconfigured.
+// It doesn't connect yet; see start.
 func newTelegramBridge(cfg *config.Config, labels map[string]string, mc *metrics.Collector, paused *atomic.Bool) *telegramBridge {
 	if !cfg.Telegram.Enabled {
 		return nil
 	}
-	return &telegramBridge{cfg: cfg, labels: labels, metrics: mc, paused: paused}
+	t := &telegramBridge{cfg: cfg, labels: labels, metrics: mc, paused: paused}
+	tc := cfg.Telegram
+	bot, err := telegram.New(telegram.Config{
+		Token:         tc.BotToken,
+		ChatIDs:       tc.ChatIDs,
+		AlertCooldown: time.Duration(tc.AlertCooldownSec) * time.Second,
+		Proxy:         tc.Proxy,
+	}, t, logTG)
+	if err != nil {
+		logTG.Errorf("%v; continuing without Telegram", err)
+		return nil
+	}
+	t.bot = bot
+	return t
 }
 
 func (t *telegramBridge) attach(p *paper.Trader, l *liveTrading, m *order.Manager) {
@@ -49,27 +63,15 @@ func (t *telegramBridge) attach(p *paper.Trader, l *liveTrading, m *order.Manage
 	t.paper, t.live, t.orders = p, l, m
 }
 
-// start connects to Telegram. A failure is logged, not fatal: trading
-// doesn't depend on Telegram.
+// start connects to Telegram in the background, retrying while it's
+// unreachable, once attach has run. Failures are logged, never fatal:
+// trading doesn't depend on Telegram. Messages sent before it connects are
+// queued.
 func (t *telegramBridge) start(ctx context.Context) {
 	if t == nil {
 		return
 	}
-	tc := t.cfg.Telegram
-	bot, err := telegram.New(telegram.Config{
-		Token:         tc.BotToken,
-		ChatIDs:       tc.ChatIDs,
-		AlertCooldown: time.Duration(tc.AlertCooldownSec) * time.Second,
-		Proxy:         tc.Proxy,
-	}, t, logTG)
-	if err == nil {
-		err = bot.Start(ctx)
-	}
-	if err != nil {
-		logTG.Errorf("%v; continuing without Telegram", err)
-		return
-	}
-	t.bot = bot
+	t.bot.Start(ctx)
 	t.bot.Notify("", fmt.Sprintf("🤖 Bot started: %s mode, %s strategy, %d market(s)\n%s",
 		t.mode(), t.cfg.Strategy.Mode, len(t.cfg.Markets.TargetMarketIDs), t.marketList()))
 }

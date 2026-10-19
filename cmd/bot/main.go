@@ -122,6 +122,7 @@ func main() {
 		liveT.attach(ctx, orderManager)
 	}
 	tg.attach(paperTrader, liveT, orderManager)
+	tg.start(ctx) // before the goroutines below read it; connects in the background
 
 	// WebSocket client
 	wsClient := websocket.NewClient(cfg)
@@ -149,8 +150,6 @@ func main() {
 
 	// Start monitoring loop
 	go monitoringLoop(ctx, metricsCollector, cfg, tg)
-
-	tg.start(ctx)
 
 	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)
